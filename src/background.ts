@@ -1,6 +1,6 @@
 import { AddressLookupTableAccount, Keypair, PublicKey, SystemProgram, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
-import type { HotWalletRequest, HotWalletResponse, PositionRequest, PositionResponse, SendSignedTransactionRequest, SignAndSendLocalRequest, TradeRequest, TradeResponse, TradeSettings } from './types';
+import type { HotWalletRequest, HotWalletResponse, IndexHistoryRequest, IndexHistoryResponse, PositionRequest, PositionResponse, SendSignedTransactionRequest, SignAndSendLocalRequest, TradeRequest, TradeResponse, TradeSettings } from './types';
 import { preparePumpTrade } from './pumpEngine';
 import { getActiveRpcUrl, SETTINGS_KEY, usesTrenchRouting } from './storage';
 import { createJitoTipInstruction } from './jito';
@@ -9,7 +9,7 @@ declare const chrome: {
   runtime: {
     onMessage: {
       addListener: (
-        callback: (message: unknown, sender: unknown, sendResponse: (response: TradeResponse | HotWalletResponse | PositionResponse) => void) => boolean | void
+        callback: (message: unknown, sender: unknown, sendResponse: (response: TradeResponse | HotWalletResponse | PositionResponse | IndexHistoryResponse) => void) => boolean | void
       ) => void;
     };
   };
@@ -43,7 +43,7 @@ const HOT_WALLET_SESSION_KEY = 'trench.hotWallet.session.v1';
 const AUTO_FEE_COMPUTE_UNIT_ESTIMATE = 400_000;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  const request = message as Partial<TradeRequest | SendSignedTransactionRequest | SignAndSendLocalRequest | HotWalletRequest | PositionRequest>;
+  const request = message as Partial<TradeRequest | SendSignedTransactionRequest | SignAndSendLocalRequest | HotWalletRequest | PositionRequest | IndexHistoryRequest>;
 
   if (request.type === 'TRENCH_PREPARE_TRADE') {
     prepareTrade(request as TradeRequest)
@@ -77,6 +77,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     handleHotWalletRequest(request as HotWalletRequest)
       .then(sendResponse)
       .catch((error: unknown) => sendResponse({ ok: false, error: normalizeError(error) }));
+    return true;
+  }
+
+  if (request.type === 'TRENCH_INDEX_HISTORY') {
+    indexWalletHistory(request as IndexHistoryRequest)
+      .then(sendResponse)
+      .catch((error: unknown) => sendResponse({ ok: false, scanned: 0, matched: 0, costBasisSol: 0, realizedPnlSol: 0, error: normalizeError(error) }));
     return true;
   }
 
@@ -439,7 +446,7 @@ function isPublicKeyString(value: string | null | undefined) {
   return typeof value === 'string' && PUBLIC_KEY_PATTERN.test(value);
 }
 
-function isHotWalletRequest(request: Partial<TradeRequest | SendSignedTransactionRequest | SignAndSendLocalRequest | PositionRequest | HotWalletRequest>) {
+function isHotWalletRequest(request: { type?: string }) {
   return typeof request.type === 'string' && request.type.startsWith('TRENCH_HOT_WALLET_');
 }
 
@@ -774,4 +781,155 @@ function readPayloadError(payload: { error?: string | { message?: string }; mess
 
 function normalizeError(error: unknown) {
   return error instanceof Error ? error.message : 'Tx failed';
+}
+
+const PNL_LEDGER_KEY = 'trench.pnl.v1';
+const TRADE_HISTORY_KEY = 'trench.tradeHistory.v1';
+const INDEX_HISTORY_LIMIT = 200;
+const LAMPORTS_PER_SOL_NUM = 1_000_000_000;
+
+type PnlLedger = {
+  rawTokenAmount: string;
+  costBasisSol: number;
+  realizedPnlSol: number;
+  updatedAt: number;
+};
+
+type StoredTradeOrder = {
+  id: string;
+  side: 'buy' | 'sell';
+  mint: string | null;
+  wallet: string;
+  route?: 'pump' | 'jupiter';
+  signature?: string;
+  summary?: string;
+  error?: string;
+  size: string;
+  status: 'Sent' | 'Failed';
+  createdAt: number;
+};
+
+async function indexWalletHistory(request: IndexHistoryRequest): Promise<IndexHistoryResponse> {
+  const { wallet, mint, settings } = request;
+  const rpcUrl = getActiveRpcUrl(settings);
+
+  const signaturesResult = await rpcRequest<Array<{ signature: string; err: unknown }>>(rpcUrl, 'getSignaturesForAddress', [
+    wallet,
+    { limit: INDEX_HISTORY_LIMIT, commitment: 'confirmed' }
+  ]);
+
+  const successfulSigs = signaturesResult.filter((s) => !s.err).map((s) => s.signature);
+  if (successfulSigs.length === 0) {
+    return { ok: true, scanned: 0, matched: 0, costBasisSol: 0, realizedPnlSol: 0 };
+  }
+
+  let costBasisSol = 0;
+  let realizedPnlSol = 0;
+  let matched = 0;
+  const historyEntries: StoredTradeOrder[] = [];
+
+  for (const sig of successfulSigs) {
+    try {
+      const tx = await rpcRequest<TxResponse | null>(rpcUrl, 'getTransaction', [
+        sig,
+        { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0, commitment: 'confirmed' }
+      ]);
+      if (!tx?.meta) continue;
+
+      const result = classifySwapTx(tx, wallet, mint);
+      if (!result) continue;
+
+      matched++;
+
+      if (result.side === 'buy') {
+        costBasisSol += result.solDelta;
+      } else {
+        realizedPnlSol += result.solDelta - (result.solDelta / (1 + realizedPnlSol / Math.max(costBasisSol, 0.000001)));
+      }
+
+      historyEntries.push({
+        id: sig,
+        side: result.side,
+        mint,
+        wallet,
+        route: result.route,
+        signature: sig,
+        summary: result.side === 'buy'
+          ? `Buy ${result.solDelta.toFixed(4)} SOL (indexed)`
+          : `Sell ${Math.abs(result.solDelta).toFixed(4)} SOL (indexed)`,
+        size: result.solDelta.toFixed(4),
+        status: 'Sent',
+        createdAt: (tx.blockTime ?? 0) * 1000
+      });
+    } catch {
+      // skip undecodeable tx
+    }
+  }
+
+  if (matched > 0) {
+    const ledger: PnlLedger = {
+      rawTokenAmount: '0',
+      costBasisSol,
+      realizedPnlSol,
+      updatedAt: Date.now()
+    };
+    await chrome.storage.local.set({ [`${PNL_LEDGER_KEY}:${wallet}:${mint}`]: ledger });
+
+    const stored = await chrome.storage.local.get(TRADE_HISTORY_KEY);
+    const existing = (stored[TRADE_HISTORY_KEY] as StoredTradeOrder[] | undefined) ?? [];
+    const existingSigs = new Set(existing.map((e) => e.id));
+    const newEntries = historyEntries.filter((e) => !existingSigs.has(e.id));
+    if (newEntries.length > 0) {
+      await chrome.storage.local.set({ [TRADE_HISTORY_KEY]: [...newEntries, ...existing].slice(0, 500) });
+    }
+  }
+
+  return { ok: true, scanned: successfulSigs.length, matched, costBasisSol, realizedPnlSol };
+}
+
+type TxResponse = {
+  blockTime?: number;
+  meta: {
+    preTokenBalances?: Array<{ accountIndex: number; mint: string; uiTokenAmount: { amount: string } }>;
+    postTokenBalances?: Array<{ accountIndex: number; mint: string; uiTokenAmount: { amount: string } }>;
+    preBalances: number[];
+    postBalances: number[];
+  };
+  transaction: {
+    message: {
+      accountKeys: Array<{ pubkey: string }>;
+    };
+  };
+};
+
+function classifySwapTx(
+  tx: TxResponse,
+  wallet: string,
+  mint: string
+): { side: 'buy' | 'sell'; solDelta: number; route: 'pump' | 'jupiter' } | null {
+  const accounts = tx.transaction.message.accountKeys.map((k) => k.pubkey);
+  const walletIndex = accounts.indexOf(wallet);
+  if (walletIndex === -1) return null;
+
+  const pre = tx.meta.preTokenBalances ?? [];
+  const post = tx.meta.postTokenBalances ?? [];
+
+  const preToken = pre.find((b) => b.mint === mint && accounts[b.accountIndex]?.startsWith(wallet.slice(0, 8)));
+  const postToken = post.find((b) => b.mint === mint && accounts[b.accountIndex]?.startsWith(wallet.slice(0, 8)));
+
+  const preAmt = BigInt(preToken?.uiTokenAmount.amount ?? '0');
+  const postAmt = BigInt(postToken?.uiTokenAmount.amount ?? '0');
+  const tokenDelta = postAmt - preAmt;
+  if (tokenDelta === 0n) return null;
+
+  const preSol = tx.meta.preBalances[walletIndex] ?? 0;
+  const postSol = tx.meta.postBalances[walletIndex] ?? 0;
+  const solDelta = Math.abs((postSol - preSol) / LAMPORTS_PER_SOL_NUM);
+  if (solDelta < 0.000001) return null;
+
+  const isJupiter = accounts.some((a) => a === 'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4');
+  const isPump = accounts.some((a) => a === '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P');
+  const route: 'pump' | 'jupiter' = isPump ? 'pump' : isJupiter ? 'jupiter' : 'jupiter';
+
+  return { side: tokenDelta > 0n ? 'buy' : 'sell', solDelta, route };
 }

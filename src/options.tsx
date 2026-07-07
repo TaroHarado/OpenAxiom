@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { CheckCircle2, ExternalLink, Gauge, KeyRound, RotateCcw, Save, ShieldCheck, SlidersHorizontal, Zap } from 'lucide-react';
+import { CheckCircle2, ExternalLink, Gauge, History, KeyRound, RotateCcw, Save, ShieldCheck, SlidersHorizontal, Zap } from 'lucide-react';
 import { defaultSettings, getActiveRpcUrl, HELIUS_RPC_TEMPLATE, JITO_MAINNET_TRANSACTION_URL, loadExtensionSettings, PUBLIC_TEST_RPC_URL, resetExtensionSettings, saveExtensionSettings, SHYFT_RPC_TEMPLATE, TRENCH_RPC_URL } from './storage';
-import type { HotWalletResponse, TradeSettings } from './types';
+import type { HotWalletResponse, IndexHistoryResponse, TradeSettings } from './types';
 import './options.css';
 
 function OptionsApp() {
@@ -12,6 +12,9 @@ function OptionsApp() {
   const [secretKey, setSecretKey] = useState('');
   const [password, setPassword] = useState('');
   const [hotWallet, setHotWallet] = useState<HotWalletResponse>({ ok: true, hasWallet: false, unlocked: false });
+  const [indexMint, setIndexMint] = useState('');
+  const [indexWallet, setIndexWallet] = useState('');
+  const [indexStatus, setIndexStatus] = useState<{ state: 'idle' | 'running' | 'ok' | 'error'; text: string }>({ state: 'idle', text: '' });
 
   useEffect(() => {
     void loadExtensionSettings().then((loaded) => {
@@ -82,6 +85,26 @@ function OptionsApp() {
     const next = { ...settings, ...patchValue };
     setSettings(next);
     await saveExtensionSettings(next);
+  }
+
+  async function indexHistory() {
+    const wallet = indexWallet.trim() || settings.localWalletPublicKey;
+    const mint = indexMint.trim();
+    if (!wallet) { setIndexStatus({ state: 'error', text: 'No wallet address. Enter wallet or import hot wallet.' }); return; }
+    if (!mint) { setIndexStatus({ state: 'error', text: 'Enter a token mint address.' }); return; }
+    setIndexStatus({ state: 'running', text: 'Scanning...' });
+    try {
+      const result = await new Promise<IndexHistoryResponse>((resolve) => {
+        chrome.runtime.sendMessage({ type: 'TRENCH_INDEX_HISTORY', wallet, mint, settings }, (r: unknown) => resolve(r as IndexHistoryResponse));
+      });
+      if (result.ok) {
+        setIndexStatus({ state: 'ok', text: `Scanned ${result.scanned} txs — ${result.matched} matched. Cost basis: ${result.costBasisSol.toFixed(4)} SOL, PnL: ${result.realizedPnlSol.toFixed(4)} SOL` });
+      } else {
+        setIndexStatus({ state: 'error', text: result.error ?? 'Index failed' });
+      }
+    } catch (err) {
+      setIndexStatus({ state: 'error', text: err instanceof Error ? err.message : 'Index failed' });
+    }
   }
 
   return (
@@ -204,6 +227,22 @@ function OptionsApp() {
           <Toggle label="Protection" checked={settings.protection} onChange={(value) => patch({ protection: value })} />
           <Toggle label="Confirmation" checked={settings.confirmation} onChange={(value) => patch({ confirmation: value })} />
           <Toggle label="Hotkeys" checked={settings.hotkeys} onChange={(value) => patch({ hotkeys: value })} />
+        </Panel>
+
+        <Panel icon={<History size={18} />} title="Index wallet history">
+          <div className="wallet-callout">Scan your wallet&apos;s past transactions to recover cost basis and PnL for an existing position. Up to 200 recent transactions are scanned.</div>
+          <Field label="Wallet address">
+            <input value={indexWallet} onChange={(e) => setIndexWallet(e.target.value)} placeholder={settings.localWalletPublicKey || 'Enter wallet pubkey'} />
+          </Field>
+          <Field label="Token mint">
+            <input value={indexMint} onChange={(e) => setIndexMint(e.target.value)} placeholder="Token mint address" />
+          </Field>
+          <div className="button-stack">
+            <button className="ghost" type="button" onClick={() => void indexHistory()} disabled={indexStatus.state === 'running'}>
+              {indexStatus.state === 'running' ? 'Scanning...' : 'Index history'}
+            </button>
+          </div>
+          {indexStatus.text && <div className={`rpc-result rpc-${indexStatus.state === 'running' ? 'testing' : indexStatus.state}`}>{indexStatus.text}</div>}
         </Panel>
       </section>
 

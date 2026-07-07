@@ -130,6 +130,22 @@ export type HotWalletResponse = {
   error?: string;
 };
 
+export type IndexHistoryRequest = {
+  type: 'TRENCH_INDEX_HISTORY';
+  wallet: string;
+  mint: string;
+  settings: TradeSettings;
+};
+
+export type IndexHistoryResponse = {
+  ok: boolean;
+  scanned: number;
+  matched: number;
+  costBasisSol: number;
+  realizedPnlSol: number;
+  error?: string;
+};
+
 export type WalletBridgeRequest = {
   id: string;
   type: 'TRENCH_WALLET_CONNECT' | 'TRENCH_WALLET_SIGN_TRANSACTION';
