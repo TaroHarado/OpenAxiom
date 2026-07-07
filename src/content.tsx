@@ -21,8 +21,8 @@ import { readAxiomTokenContext } from './axiom';
 import {
   defaultSettings,
   loadCollapsed,
+  loadExtensionSettings,
   loadPosition,
-  loadSettings,
   saveCollapsed,
   savePosition,
   saveSettings
@@ -71,7 +71,8 @@ function mount() {
 }
 
 function TradeWizOverlay() {
-  const [settingsState, setSettingsState] = useState<TradeSettings>(() => loadSettings());
+  const [settingsState, setSettingsState] = useState<TradeSettings>(defaultSettings);
+  const [settingsReady, setSettingsReady] = useState(false);
   const [position, setPosition] = useState(() => clampPosition(loadPosition()));
   const [collapsed, setCollapsed] = useState(() => loadCollapsed());
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -97,8 +98,16 @@ function TradeWizOverlay() {
   );
 
   useEffect(() => {
+    void loadExtensionSettings().then((loaded) => {
+      setSettingsState(loaded);
+      setSettingsReady(true);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!settingsReady) return;
     saveSettings(settingsState);
-  }, [settingsState]);
+  }, [settingsReady, settingsState]);
 
   useEffect(() => {
     savePosition(position);

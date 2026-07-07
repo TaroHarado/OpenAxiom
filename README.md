@@ -1,6 +1,6 @@
 # TradeWiz Axiom Overlay
 
-Open-source browser extension MVP for a floating TradeWiz trading terminal on top of Axiom.
+Open-source Chrome Manifest V3 extension MVP for a floating TradeWiz trading terminal on top of Axiom.
 
 The extension injects a Shadow DOM widget into `https://axiom.trade/*`, keeps Axiom layout untouched, saves widget position/settings locally, and routes trade button clicks through a background service worker message layer.
 
@@ -21,6 +21,7 @@ Current execution status:
 - Sell quick buttons: `10%`, `30%`, `70%`, `100%`.
 - Slippage, priority fee, Jito tip and protection chips.
 - Compact settings panel for presets and hotkeys.
+- Chrome extension settings page at `chrome://extensions` -> TradeWiz -> Details -> Extension options.
 - Active orders list with cancel state.
 - Inline loading, success and error states. No browser alerts.
 - Axiom token/mint extraction from URL/DOM best-effort heuristics.
@@ -29,6 +30,30 @@ Current execution status:
 - Jupiter quote/swap transaction preparation in the background service worker.
 - Signed transaction submission through the configured RPC URL.
 - Pump `buy_exact_quote_in_v2` / `sell_v2` transaction preparation in the background service worker.
+
+## What It Looks Like
+
+After installation, open `https://axiom.trade/*`. A compact dark TradeWiz terminal floats over the page, roughly 320px wide. It has a draggable header, wallet button, preset controls, buy/sell quick buttons, slippage/fee chips, settings drawer, order list, and inline transaction status.
+
+Chrome also exposes a full settings page for the extension. Use it to configure engine mode, public RPC URL, buy amounts, sell percentages, slippage, priority fee, Jito tip, protection, confirmation, and hotkeys.
+
+## Install In Chrome
+
+```bash
+npm install
+npm run build
+```
+
+Then:
+
+1. Open `chrome://extensions`.
+2. Enable `Developer mode`.
+3. Click `Load unpacked`.
+4. Select the local `dist/` folder.
+5. Open `https://axiom.trade/` and the floating widget will appear on supported pages.
+6. Open extension settings through `Details` -> `Extension options`.
+
+Default test RPC is `https://api.mainnet-beta.solana.com`. It is public and rate-limited, so it is fine for testing but should be replaced with a dedicated Helius/QuickNode endpoint for serious use.
 
 ## Security Model
 

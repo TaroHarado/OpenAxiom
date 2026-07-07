@@ -10,7 +10,8 @@ export default defineConfig({
       input: {
         content: 'src/content.tsx',
         background: 'src/background.ts',
-        injected: 'src/injected.ts'
+        injected: 'src/injected.ts',
+        options: 'options.html'
       },
       output: {
         entryFileNames: '[name].js',
