@@ -87,6 +87,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if ((request as { type?: string }).type === 'TRENCH_SYNC_TRADE_HISTORY') {
+    const entries = (request as { entries?: unknown }).entries;
+    if (Array.isArray(entries)) {
+      void chrome.storage.local.set({ [TRADE_HISTORY_KEY]: entries.slice(0, 500) });
+    }
+    sendResponse({ ok: true });
+    return true;
+  }
+
   return false;
 });
 

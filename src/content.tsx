@@ -34,7 +34,7 @@ declare global {
     chrome?: {
       runtime?: {
         getURL?: (path: string) => string;
-        sendMessage?: (message: unknown, callback: (response: TradeResponse | PositionResponse) => void) => void;
+        sendMessage?: (message: unknown, callback?: (response: TradeResponse | PositionResponse) => void) => void;
       };
     };
   }
@@ -84,6 +84,7 @@ function TrenchOverlay() {
   const [token, setToken] = useState<TokenContext>(() => readAxiomTokenContext());
   const [orders, setOrders] = useState<TradeOrder[]>(() => loadTradeHistory());
   const [pendingSide, setPendingSide] = useState<TradeSide | null>(null);
+  const [confirmPending, setConfirmPending] = useState<{ side: TradeSide; amount: number } | null>(null);
   const [wallet, setWallet] = useState<string | null>(null);
   const [positionState, setPositionState] = useState<PositionState>(() => emptyPosition(readAxiomTokenContext().symbol));
   const [pnlLedger, setPnlLedger] = useState<PnlLedger | null>(null);
@@ -249,6 +250,15 @@ function TrenchOverlay() {
   }
 
   async function executeTrade(side: TradeSide, amount: number) {
+    if (pendingSide) return;
+    if (settingsState.confirmation) {
+      setConfirmPending({ side, amount });
+      return;
+    }
+    await doExecuteTrade(side, amount);
+  }
+
+  async function doExecuteTrade(side: TradeSide, amount: number) {
     if (pendingSide) return;
     setActive(true);
     setPendingSide(side);
@@ -420,6 +430,23 @@ function TrenchOverlay() {
       </main>
 
       {toast ? <Toast toast={toast} /> : null}
+      {confirmPending ? (
+        <div className="tw-confirm-overlay">
+          <div className="tw-confirm-text">
+            {confirmPending.side === 'buy'
+              ? `Buy ${confirmPending.amount} SOL?`
+              : `Sell ${confirmPending.amount}%?`}
+          </div>
+          <div className="tw-confirm-actions">
+            <button className="tw-confirm-cancel" type="button" onClick={() => setConfirmPending(null)}>Cancel</button>
+            <button className={`tw-confirm-ok tw-confirm-${confirmPending.side}`} type="button" onClick={() => {
+              const { side, amount } = confirmPending;
+              setConfirmPending(null);
+              void doExecuteTrade(side, amount);
+            }}>Confirm</button>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -898,6 +925,7 @@ function addTradeHistoryDirect(order: Omit<TradeOrder, 'id' | 'createdAt'>) {
   const current = loadTradeHistory();
   const next = [{ ...order, id: `tr-${Date.now()}-${Math.random().toString(16).slice(2)}`, createdAt: Date.now() }, ...current].slice(0, 50);
   localStorage.setItem(TRADE_HISTORY_KEY, JSON.stringify(next));
+  void window.chrome?.runtime?.sendMessage?.({ type: 'TRENCH_SYNC_TRADE_HISTORY', entries: next });
 }
 
 function loadTradeHistory(): TradeOrder[] {

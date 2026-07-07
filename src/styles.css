@@ -241,18 +241,13 @@ select {
   border: 1px solid #1e1e26;
   border-radius: 6px;
   background: #111117;
-  color: #8080908;
+  color: #808090;
   cursor: pointer;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0;
   outline: none;
   transition: background 80ms, border-color 80ms, color 80ms;
-}
-
-/* Fix the doubled hex above */
-.tw-quick {
-  color: #808090;
 }
 
 .tw-quick:active {
@@ -635,6 +630,77 @@ select {
 
 .tw-flash-error {
   animation: tw-error-flash 480ms ease;
+}
+
+/* ─── Confirmation overlay ────────────────────────────── */
+
+.tw-confirm-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(13, 13, 17, 0.92);
+  backdrop-filter: blur(2px);
+  border-radius: 8px;
+}
+
+.tw-confirm-text {
+  font-size: 13px;
+  font-weight: 700;
+  color: #e8e9ee;
+  letter-spacing: 0.02em;
+}
+
+.tw-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.tw-confirm-cancel,
+.tw-confirm-ok {
+  height: 28px;
+  padding: 0 14px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.tw-confirm-cancel {
+  border: 1px solid #252530;
+  background: transparent;
+  color: #555562;
+}
+
+.tw-confirm-cancel:hover {
+  border-color: #353545;
+  color: #9090a0;
+}
+
+.tw-confirm-ok.tw-confirm-buy {
+  border: 1px solid rgba(20, 241, 149, 0.4);
+  background: rgba(20, 241, 149, 0.08);
+  color: #14f195;
+}
+
+.tw-confirm-ok.tw-confirm-buy:hover {
+  background: rgba(20, 241, 149, 0.14);
+}
+
+.tw-confirm-ok.tw-confirm-sell {
+  border: 1px solid rgba(255, 70, 100, 0.4);
+  background: rgba(255, 70, 100, 0.08);
+  color: #ff607a;
+}
+
+.tw-confirm-ok.tw-confirm-sell:hover {
+  background: rgba(255, 70, 100, 0.14);
 }
 
 /* ─── Responsive ──────────────────────────────────────── */
