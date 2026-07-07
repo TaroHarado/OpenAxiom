@@ -325,7 +325,7 @@ function TrenchOverlay() {
 
         <nav className="tw-header-actions tw-no-drag" aria-label="Trench actions">
           {isPublicRpc(settingsState) ? <span className="tw-rpc-warn" title="Public RPC — rate limited, consider adding a private key in Options">PUB</span> : null}
-          <IconButton label="Orders"><History size={14} /></IconButton>
+          <IconButton label="Orders" active={ordersOpen} onClick={() => setOrdersOpen((v) => !v)}><History size={14} /></IconButton>
           <IconButton label={walletButtonLabel(settingsState, wallet)} onClick={() => connectBrowserWallet(settingsState, setWallet, setToast)}>
             <Wallet size={14} />
           </IconButton>
@@ -359,7 +359,7 @@ function TrenchOverlay() {
         <TradeSection
           side="buy"
           title="Buy"
-          meta={<><SolanaMark /> {positionLoading ? '...' : positionState.walletSol.toFixed(4)} SOL</>}
+          meta={<><SolanaMark /> {positionLoading ? '...' : positionState.walletSol.toFixed(4)}{positionState.walletWsol > 0 ? `+${positionState.walletWsol.toFixed(4)}w` : ''} SOL</>}
           buttons={settingsState.buyAmounts}
           selected={settingsState.selectedBuyAmount}
           pending={pendingSide === 'buy'}
@@ -464,6 +464,7 @@ function TradeSection(props: {
 
       <div className="tw-param-row">
         <ParamChip title="Signer">{settings.signerMode === 'local' ? 'HOT' : 'WLT'}</ParamChip>
+        <ParamChip title="Engine">{settings.executionMode === 'jupiter' ? 'JUP' : settings.executionMode === 'pump' ? 'PMP' : 'AUTO'}</ParamChip>
         <ParamChip title="RPC mode">{settings.rpcMode === 'trench' ? 'TRN' : 'RPC'}</ParamChip>
         <ParamChip title="Send mode">{settings.sendMode === 'jito' ? 'JITO' : 'STD'}</ParamChip>
         <ParamChip title="Slippage">SLP {settings.slippage}%</ParamChip>

@@ -176,8 +176,12 @@ async function estimateAutoFee(settings: TradeSettings) {
   const rpcUrl = getActiveRpcUrl(settings);
   validateRpcUrl(rpcUrl);
 
-  const response = await rpcRequest<Array<{ prioritizationFee?: number }>>(rpcUrl, 'getRecentPrioritizationFees', []);
-  const microLamportsPerCu = response
+  const [rpcFees, jitoFloor] = await Promise.all([
+    rpcRequest<Array<{ prioritizationFee?: number }>>(rpcUrl, 'getRecentPrioritizationFees', []),
+    settings.sendMode === 'jito' ? fetchJitoTipFloor(settings.jitoEndpoint).catch(() => null) : Promise.resolve(null)
+  ]);
+
+  const microLamportsPerCu = rpcFees
     .map((item) => Number(item.prioritizationFee ?? 0))
     .filter((fee) => Number.isFinite(fee) && fee > 0)
     .sort((a, b) => a - b);
@@ -188,13 +192,30 @@ async function estimateAutoFee(settings: TradeSettings) {
   const targetMicroLamports = Math.max(sampledMicroLamports, floorMicroLamports);
   const targetLamports = Math.ceil((AUTO_FEE_COMPUTE_UNIT_ESTIMATE * targetMicroLamports) / 1_000_000);
   const cappedTotalLamports = Math.min(Math.round(settings.autoFeeMax * LAMPORTS_PER_SOL), targetLamports);
-  const jitoTipLamports = settings.sendMode === 'jito' ? Math.min(Math.round(cappedTotalLamports * 0.35), Math.round(0.0015 * LAMPORTS_PER_SOL)) : 0;
+
+  let jitoTipLamports = 0;
+  if (settings.sendMode === 'jito') {
+    const liveFloorLamports = jitoFloor ?? 0;
+    const derivedTipLamports = Math.round(cappedTotalLamports * 0.35);
+    jitoTipLamports = Math.min(
+      Math.max(derivedTipLamports, liveFloorLamports),
+      Math.round(0.003 * LAMPORTS_PER_SOL)
+    );
+  }
   const priorityLamports = Math.max(1, cappedTotalLamports - jitoTipLamports);
 
   return {
     priorityFeeSol: priorityLamports / LAMPORTS_PER_SOL,
     jitoTipSol: jitoTipLamports / LAMPORTS_PER_SOL
   };
+}
+
+async function fetchJitoTipFloor(jitoEndpoint: string): Promise<number> {
+  const base = jitoEndpoint.replace('/api/v1/transactions', '');
+  const url = `${base}/api/v1/bundles/tip_floor`;
+  const data = await fetchJson<Array<{ landed_tips_50th_percentile?: number; landed_tips_75th_percentile?: number; landed_tips_95th_percentile?: number }>>(url);
+  const tip = Array.isArray(data) && data[0] ? (data[0].landed_tips_75th_percentile ?? data[0].landed_tips_50th_percentile ?? 0) : 0;
+  return Math.round(tip * LAMPORTS_PER_SOL);
 }
 
 function shouldAddJitoTip(settings: TradeSettings) {
@@ -874,6 +895,10 @@ async function indexWalletHistory(request: IndexHistoryRequest): Promise<IndexHi
       updatedAt: Date.now()
     };
     await chrome.storage.local.set({ [`${PNL_LEDGER_KEY}:${wallet}:${mint}`]: ledger });
+
+    const pnlStore = await chrome.storage.local.get(PNL_LEDGER_KEY);
+    const existingStore = (pnlStore[PNL_LEDGER_KEY] as Record<string, PnlLedger> | undefined) ?? {};
+    await chrome.storage.local.set({ [PNL_LEDGER_KEY]: { ...existingStore, [`${wallet}:${mint}`]: ledger } });
 
     const stored = await chrome.storage.local.get(TRADE_HISTORY_KEY);
     const existing = (stored[TRADE_HISTORY_KEY] as StoredTradeOrder[] | undefined) ?? [];
