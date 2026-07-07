@@ -38,8 +38,12 @@ export type TokenContext = {
 
 export type PositionState = {
   walletSol: number;
+  walletWsol: number;
   tokenAmount: number;
+  tokenRawAmount: string;
   tokenSymbol: string;
+  costBasisSol: number;
+  realizedPnlSol: number;
   pnlUsd: number;
   pnlSol: number;
 };
@@ -95,7 +99,9 @@ export type PositionRequest = {
 export type PositionResponse = {
   ok: boolean;
   walletSol?: number;
+  walletWsol?: number;
   tokenAmount?: number;
+  tokenRawAmount?: string;
   tokenDecimals?: number;
   error?: string;
 };

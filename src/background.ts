@@ -192,12 +192,15 @@ async function getPosition(request: PositionRequest): Promise<PositionResponse> 
 
   const balance = await rpcRequest<{ value?: number } | number>(getActiveRpcUrl(request.settings), 'getBalance', [request.wallet, { commitment: 'processed' }]);
   const lamports = typeof balance === 'number' ? balance : balance.value ?? 0;
-  const token = request.mint && isPublicKeyString(request.mint) ? await getTokenBalance(request) : { amount: 0, decimals: 0 };
+  const token = request.mint && isPublicKeyString(request.mint) ? await getTokenBalance(request) : { amount: 0, rawAmount: 0n, decimals: 0 };
+  const wsol = await getTokenBalance({ ...request, mint: SOL_MINT });
 
   return {
     ok: true,
     walletSol: lamports / LAMPORTS_PER_SOL,
+    walletWsol: wsol.amount,
     tokenAmount: token.amount,
+    tokenRawAmount: token.rawAmount.toString(),
     tokenDecimals: token.decimals
   };
 }

@@ -43,6 +43,7 @@ declare global {
 }
 
 const ROOT_ID = 'trench-shadow-root';
+const PNL_LEDGER_KEY = 'trench.pnl.v1';
 
 const sampleOrders: TradeOrder[] = [
   { id: 'o-1', side: 'sell', condition: 'Price -25% / $0.00339', size: '50%', status: 'Active' },
@@ -50,6 +51,13 @@ const sampleOrders: TradeOrder[] = [
   { id: 'o-3', side: 'buy', condition: 'Price +25% / $0.00339', size: '5.5 SOL', status: 'Failed' },
   { id: 'o-4', side: 'buy', condition: 'Price +25% / $0.00339', size: '5.5 SOL', status: 'Canceled' }
 ];
+
+type PnlLedger = {
+  rawTokenAmount: string;
+  costBasisSol: number;
+  realizedPnlSol: number;
+  updatedAt: number;
+};
 
 function mount() {
   if (document.getElementById(ROOT_ID)) return;
@@ -82,6 +90,7 @@ function TrenchOverlay() {
   const [pendingSide, setPendingSide] = useState<TradeSide | null>(null);
   const [wallet, setWallet] = useState<string | null>(null);
   const [positionState, setPositionState] = useState<PositionState>(() => emptyPosition(readAxiomTokenContext().symbol));
+  const [pnlLedger, setPnlLedger] = useState<PnlLedger | null>(null);
   const [positionLoading, setPositionLoading] = useState(false);
   const [positionError, setPositionError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ kind: ToastKind; text: string; signature?: string } | null>(null);
@@ -118,10 +127,14 @@ function TrenchOverlay() {
       setPositionError(null);
       setPositionState({
         walletSol: response.walletSol ?? 0,
+        walletWsol: response.walletWsol ?? 0,
         tokenAmount: response.tokenAmount ?? 0,
+        tokenRawAmount: response.tokenRawAmount ?? '0',
         tokenSymbol: token.symbol,
+        costBasisSol: pnlLedger?.costBasisSol ?? 0,
+        realizedPnlSol: pnlLedger?.realizedPnlSol ?? 0,
         pnlUsd: 0,
-        pnlSol: 0
+        pnlSol: pnlLedger?.realizedPnlSol ?? 0
       });
     };
 
@@ -131,7 +144,11 @@ function TrenchOverlay() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [displayedWallet, settingsReady, settingsState.rpcMode, settingsState.rpcUrl, settingsState.trenchRpcUrl, token.mint, token.symbol]);
+  }, [displayedWallet, pnlLedger?.costBasisSol, pnlLedger?.realizedPnlSol, settingsReady, settingsState.rpcMode, settingsState.rpcUrl, settingsState.trenchRpcUrl, token.mint, token.symbol]);
+
+  useEffect(() => {
+    setPnlLedger(displayedWallet && token.mint ? loadPnlLedger(displayedWallet, token.mint) : null);
+  }, [displayedWallet, token.mint]);
 
   useEffect(() => {
     if (!settingsReady) return;
@@ -245,6 +262,7 @@ function TrenchOverlay() {
       const publicKey = settingsState.signerMode === 'local' ? settingsState.localWalletPublicKey : wallet ?? (await walletRequest('TRENCH_WALLET_CONNECT')).publicKey;
       if (!publicKey) throw new Error('Wallet not connected');
       setWallet(publicKey);
+      const before = token.mint ? await getPosition(publicKey, token.mint, settingsState) : null;
 
       const prepared = await prepareTradeMessage(side, amount, token.mint, publicKey, settingsState);
       if (!prepared.ok || !prepared.swapTransaction) throw new Error(prepared.error ?? 'Tx prepare failed');
@@ -256,6 +274,7 @@ function TrenchOverlay() {
 
       setFlash('success');
       setToast({ kind: 'success', text: side === 'buy' ? 'Buy filled' : 'Sell filled', signature: response.signature });
+      if (token.mint && before?.ok) void refreshPnlAfterTrade(publicKey, token.mint, side, before, settingsState, setPnlLedger, setPositionState);
     } catch (error) {
       setFlash('error');
       setToast({ kind: 'error', text: error instanceof Error ? error.message : 'RPC timeout' });
@@ -342,7 +361,7 @@ function TrenchOverlay() {
             <span className="tw-position-meta">
               {positionState.tokenAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })} {positionState.tokenSymbol} /{' '}
               <span className={positionState.pnlSol > 0 ? 'tw-positive' : positionState.pnlSol < 0 ? 'tw-negative' : 'tw-muted'}>
-                {positionError ? positionError : `PNL ${positionState.pnlSol.toFixed(2)} SOL`}
+                {positionError ? positionError : `RPNL ${positionState.realizedPnlSol.toFixed(4)} SOL`}
               </span>
             </span>
           }
@@ -577,7 +596,102 @@ function SolanaMark() {
 }
 
 function emptyPosition(symbol: string): PositionState {
-  return { walletSol: 0, tokenAmount: 0, tokenSymbol: symbol, pnlUsd: 0, pnlSol: 0 };
+  return { walletSol: 0, walletWsol: 0, tokenAmount: 0, tokenRawAmount: '0', tokenSymbol: symbol, costBasisSol: 0, realizedPnlSol: 0, pnlUsd: 0, pnlSol: 0 };
+}
+
+async function refreshPnlAfterTrade(
+  wallet: string,
+  mint: string,
+  side: TradeSide,
+  before: PositionResponse,
+  settings: TradeSettings,
+  setPnlLedger: (ledger: PnlLedger) => void,
+  setPositionState: React.Dispatch<React.SetStateAction<PositionState>>
+) {
+  await delay(5000);
+  const after = await getPosition(wallet, mint, settings);
+  if (!after.ok) return;
+
+  const next = updatePnlLedger(wallet, mint, side, before, after);
+  setPnlLedger(next);
+  setPositionState((current) => ({
+    ...current,
+    walletSol: after.walletSol ?? current.walletSol,
+    walletWsol: after.walletWsol ?? current.walletWsol,
+    tokenAmount: after.tokenAmount ?? current.tokenAmount,
+    tokenRawAmount: after.tokenRawAmount ?? current.tokenRawAmount,
+    costBasisSol: next.costBasisSol,
+    realizedPnlSol: next.realizedPnlSol,
+    pnlSol: next.realizedPnlSol
+  }));
+}
+
+function updatePnlLedger(wallet: string, mint: string, side: TradeSide, before: PositionResponse, after: PositionResponse) {
+  const current = loadPnlLedger(wallet, mint) ?? { rawTokenAmount: '0', costBasisSol: 0, realizedPnlSol: 0, updatedAt: Date.now() };
+  const beforeRaw = BigInt(before.tokenRawAmount ?? '0');
+  const afterRaw = BigInt(after.tokenRawAmount ?? '0');
+  const tokenDelta = afterRaw - beforeRaw;
+  const solBefore = (before.walletSol ?? 0) + (before.walletWsol ?? 0);
+  const solAfter = (after.walletSol ?? 0) + (after.walletWsol ?? 0);
+  const solDelta = solAfter - solBefore;
+
+  let rawTokenAmount = BigInt(current.rawTokenAmount);
+  let costBasisSol = current.costBasisSol;
+  let realizedPnlSol = current.realizedPnlSol;
+
+  if (side === 'buy' && tokenDelta > 0n && solDelta < 0) {
+    rawTokenAmount += tokenDelta;
+    costBasisSol += Math.abs(solDelta);
+  }
+
+  if (side === 'sell' && tokenDelta < 0n && solDelta > 0 && rawTokenAmount > 0n && costBasisSol > 0) {
+    const soldRaw = minBigInt(-tokenDelta, rawTokenAmount);
+    const soldRatio = Number((soldRaw * 1_000_000n) / rawTokenAmount) / 1_000_000;
+    const removedCostBasis = costBasisSol * soldRatio;
+    rawTokenAmount -= soldRaw;
+    costBasisSol = Math.max(0, costBasisSol - removedCostBasis);
+    realizedPnlSol += solDelta - removedCostBasis;
+  }
+
+  const next: PnlLedger = {
+    rawTokenAmount: rawTokenAmount.toString(),
+    costBasisSol,
+    realizedPnlSol,
+    updatedAt: Date.now()
+  };
+  savePnlLedger(wallet, mint, next);
+  return next;
+}
+
+function loadPnlLedger(wallet: string, mint: string): PnlLedger | null {
+  const store = loadPnlStore();
+  return store[pnlKey(wallet, mint)] ?? null;
+}
+
+function savePnlLedger(wallet: string, mint: string, ledger: PnlLedger) {
+  const store = loadPnlStore();
+  store[pnlKey(wallet, mint)] = ledger;
+  localStorage.setItem(PNL_LEDGER_KEY, JSON.stringify(store));
+}
+
+function loadPnlStore(): Record<string, PnlLedger> {
+  try {
+    return JSON.parse(localStorage.getItem(PNL_LEDGER_KEY) ?? '{}') as Record<string, PnlLedger>;
+  } catch {
+    return {};
+  }
+}
+
+function pnlKey(wallet: string, mint: string) {
+  return `${wallet}:${mint}`;
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function minBigInt(a: bigint, b: bigint) {
+  return a < b ? a : b;
 }
 
 function walletButtonLabel(settings: TradeSettings, wallet: string | null) {
