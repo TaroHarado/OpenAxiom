@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Trench</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        width: 300px;
+        margin: 0;
+        background: #09090d;
+        color: #ededf2;
+        font: 12px/1.4 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      .wrap {
+        padding: 14px;
+        display: grid;
+        gap: 12px;
+      }
+      .head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .logo {
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        border-radius: 8px;
+        background: linear-gradient(135deg, #14f195, #9945ff);
+        color: #050507;
+        font-weight: 900;
+        letter-spacing: 0;
+      }
+      h1 {
+        margin: 0;
+        font-size: 16px;
+        letter-spacing: 0;
+      }
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 8px;
+        border: 1px solid rgba(20, 241, 149, 0.24);
+        border-radius: 8px;
+        background: rgba(20, 241, 149, 0.08);
+        color: #9fffd8;
+        font-weight: 760;
+      }
+      .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        background: #14f195;
+        box-shadow: 0 0 10px rgba(20, 241, 149, 0.7);
+      }
+      p {
+        margin: 0;
+        color: #a7a8b2;
+      }
+      .actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      button, a {
+        height: 34px;
+        display: inline-grid;
+        place-items: center;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.055);
+        color: #ededf2;
+        text-decoration: none;
+        font: inherit;
+        font-weight: 780;
+        cursor: pointer;
+      }
+      .primary {
+        border-color: rgba(20, 241, 149, 0.34);
+        background: #14f195;
+        color: #050507;
+      }
+      .hint {
+        padding-top: 2px;
+        color: #747681;
+        font-size: 11px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="head">
+        <div class="logo">TR</div>
+        <div>
+          <h1>Trench</h1>
+          <p>Axiom overlay extension</p>
+        </div>
+      </div>
+      <div class="status"><span class="dot"></span><span>Extension popup is working</span></div>
+      <p>Open an Axiom meme page and reload it. The floating Trench panel should mount on the page.</p>
+      <div class="actions">
+        <a class="primary" href="https://axiom.trade/meme/F13Tcyxe19oRt4W4i42Pg5iyttSaXyVqHX3HpyHyVtiV?chain=sol" target="_blank">Open Axiom</a>
+        <button id="options" type="button">Options</button>
+      </div>
+      <div class="hint">If the page panel is missing, open DevTools Console and look for [Trench] content script mounted.</div>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>

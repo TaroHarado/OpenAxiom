@@ -36,6 +36,7 @@
     }
   ],
   "action": {
-    "default_title": "Trench"
+    "default_title": "Trench",
+    "default_popup": "popup.html"
   }
 }
