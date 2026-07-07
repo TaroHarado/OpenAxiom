@@ -1,8 +1,9 @@
 import { AddressLookupTableAccount, Keypair, PublicKey, SystemProgram, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
-import type { HotWalletRequest, HotWalletResponse, PositionRequest, PositionResponse, SendSignedTransactionRequest, SignAndSendLocalRequest, TradeRequest, TradeResponse } from './types';
+import type { HotWalletRequest, HotWalletResponse, PositionRequest, PositionResponse, SendSignedTransactionRequest, SignAndSendLocalRequest, TradeRequest, TradeResponse, TradeSettings } from './types';
 import { preparePumpTrade } from './pumpEngine';
 import { getActiveRpcUrl, usesTrenchRouting } from './storage';
+import { createJitoTipInstruction } from './jito';
 
 declare const chrome: {
   runtime: {
@@ -39,6 +40,7 @@ const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xW
 const CREATE_ATA_IDEMPOTENT_DISCRIMINATOR = 1;
 const HOT_WALLET_STORAGE_KEY = 'trench.hotWallet.v1';
 const HOT_WALLET_SESSION_KEY = 'trench.hotWallet.session.v1';
+const AUTO_FEE_COMPUTE_UNIT_ESTIMATE = 400_000;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const request = message as Partial<TradeRequest | SendSignedTransactionRequest | SignAndSendLocalRequest | HotWalletRequest | PositionRequest>;
@@ -83,6 +85,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 async function prepareTrade(request: TradeRequest): Promise<TradeResponse> {
   validateTradeRequest(request);
+  const requestWithFees = await applyAutoFee(request);
+  request = requestWithFees;
   const mint = request.mint as string;
   const feeRecipient = getTrenchFeeRecipient(request.settings);
 
@@ -109,14 +113,14 @@ async function prepareTrade(request: TradeRequest): Promise<TradeResponse> {
     platformFeeBps: feeRecipient && request.side === 'sell' ? TRENCH_FEE_BPS : 0
   });
 
-  if (feeRecipient) {
-    const swap = await buildJupiterSwapWithFee(request, quote, feeRecipient, BigInt(trenchFeeLamports));
+  if (feeRecipient || shouldAddJitoTip(request.settings)) {
+    const swap = await buildJupiterSwapInstructions(request, quote, feeRecipient, BigInt(trenchFeeLamports));
     return {
       ok: true,
       route: 'jupiter',
       swapTransaction: swap.swapTransaction,
       lastValidBlockHeight: swap.lastValidBlockHeight,
-      quoteSummary: request.side === 'buy' ? `${request.amount} SOL via Jupiter incl. 0.1% Trench fee` : `${request.amount}% via Jupiter incl. 0.1% Trench fee`
+      quoteSummary: request.side === 'buy' ? `${request.amount} SOL via Jupiter${feeRecipient ? ' incl. 0.1% Trench fee' : ''}` : `${request.amount}% via Jupiter${feeRecipient ? ' incl. 0.1% Trench fee' : ''}`
     };
   }
 
@@ -141,8 +145,53 @@ async function prepareTrade(request: TradeRequest): Promise<TradeResponse> {
   };
 }
 
-async function buildJupiterSwapWithFee(request: TradeRequest, quote: unknown, feeRecipient: string, feeLamports: bigint) {
-  const feeAccount = request.side === 'sell' ? getAssociatedTokenAddress(SOL_MINT, feeRecipient) : undefined;
+async function applyAutoFee(request: TradeRequest): Promise<TradeRequest> {
+  if (!request.settings.autoFee) return request;
+
+  const fee = await estimateAutoFee(request.settings).catch(() => null);
+  if (!fee) return request;
+
+  return {
+    ...request,
+    settings: {
+      ...request.settings,
+      priorityFee: fee.priorityFeeSol,
+      jitoTip: request.settings.sendMode === 'jito' ? fee.jitoTipSol : 0
+    }
+  };
+}
+
+async function estimateAutoFee(settings: TradeSettings) {
+  const rpcUrl = getActiveRpcUrl(settings);
+  validateRpcUrl(rpcUrl);
+
+  const response = await rpcRequest<Array<{ prioritizationFee?: number }>>(rpcUrl, 'getRecentPrioritizationFees', []);
+  const microLamportsPerCu = response
+    .map((item) => Number(item.prioritizationFee ?? 0))
+    .filter((fee) => Number.isFinite(fee) && fee > 0)
+    .sort((a, b) => a - b);
+
+  const percentile = settings.autoFeeLevel === 'turbo' ? 0.95 : settings.autoFeeLevel === 'fast' ? 0.85 : 0.7;
+  const sampledMicroLamports = microLamportsPerCu.length ? microLamportsPerCu[Math.min(microLamportsPerCu.length - 1, Math.floor((microLamportsPerCu.length - 1) * percentile))] : 1_250_000;
+  const floorMicroLamports = settings.autoFeeLevel === 'turbo' ? 7_500_000 : settings.autoFeeLevel === 'fast' ? 3_000_000 : 1_250_000;
+  const targetMicroLamports = Math.max(sampledMicroLamports, floorMicroLamports);
+  const targetLamports = Math.ceil((AUTO_FEE_COMPUTE_UNIT_ESTIMATE * targetMicroLamports) / 1_000_000);
+  const cappedTotalLamports = Math.min(Math.round(settings.autoFeeMax * LAMPORTS_PER_SOL), targetLamports);
+  const jitoTipLamports = settings.sendMode === 'jito' ? Math.min(Math.round(cappedTotalLamports * 0.35), Math.round(0.0015 * LAMPORTS_PER_SOL)) : 0;
+  const priorityLamports = Math.max(1, cappedTotalLamports - jitoTipLamports);
+
+  return {
+    priorityFeeSol: priorityLamports / LAMPORTS_PER_SOL,
+    jitoTipSol: jitoTipLamports / LAMPORTS_PER_SOL
+  };
+}
+
+function shouldAddJitoTip(settings: TradeSettings) {
+  return settings.sendMode === 'jito' && Number.isFinite(settings.jitoTip) && settings.jitoTip > 0;
+}
+
+async function buildJupiterSwapInstructions(request: TradeRequest, quote: unknown, feeRecipient: string | null, feeLamports: bigint) {
+  const feeAccount = feeRecipient && request.side === 'sell' ? getAssociatedTokenAddress(SOL_MINT, feeRecipient) : undefined;
   const response = await fetchJson<JupiterSwapInstructionsResponse>(JUPITER_SWAP_INSTRUCTIONS_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -157,14 +206,16 @@ async function buildJupiterSwapWithFee(request: TradeRequest, quote: unknown, fe
   });
 
   const payer = new PublicKey(request.wallet);
-  const treasury = new PublicKey(feeRecipient);
+  const treasury = feeRecipient ? new PublicKey(feeRecipient) : null;
+  const jitoTipInstruction = createJitoTipInstruction(payer, request.settings);
   const computeBudgetInstructions = response.computeBudgetInstructions ?? [];
   const setupInstructions = response.setupInstructions ?? [];
   const addressLookupTableAddresses = response.addressLookupTableAddresses ?? [];
   const instructions = [
     ...computeBudgetInstructions.map(decodeJupiterInstruction),
-    ...(request.side === 'buy' && feeLamports > 0n ? [SystemProgram.transfer({ fromPubkey: payer, toPubkey: treasury, lamports: Number(feeLamports) })] : []),
-    ...(request.side === 'sell' ? [createAssociatedTokenAccountIdempotentInstruction(payer, new PublicKey(feeAccount as string), treasury, new PublicKey(SOL_MINT))] : []),
+    ...(jitoTipInstruction ? [jitoTipInstruction] : []),
+    ...(treasury && request.side === 'buy' && feeLamports > 0n ? [SystemProgram.transfer({ fromPubkey: payer, toPubkey: treasury, lamports: Number(feeLamports) })] : []),
+    ...(treasury && request.side === 'sell' ? [createAssociatedTokenAccountIdempotentInstruction(payer, new PublicKey(feeAccount as string), treasury, new PublicKey(SOL_MINT))] : []),
     ...setupInstructions.map(decodeJupiterInstruction),
     decodeJupiterInstruction(response.swapInstruction),
     ...(response.cleanupInstruction ? [decodeJupiterInstruction(response.cleanupInstruction)] : [])
@@ -321,6 +372,10 @@ function validateTradeRequest(request: TradeRequest) {
   }
   if (!Number.isFinite(settings.jitoTip) || settings.jitoTip < 0 || settings.jitoTip > MAX_PRIORITY_FEE_SOL) {
     throw new Error(`Jito tip must be between 0 and ${MAX_PRIORITY_FEE_SOL} SOL`);
+  }
+  if (!['normal', 'fast', 'turbo'].includes(settings.autoFeeLevel)) throw new Error('Invalid auto fee level');
+  if (!Number.isFinite(settings.autoFeeMax) || settings.autoFeeMax < 0.0001 || settings.autoFeeMax > MAX_PRIORITY_FEE_SOL) {
+    throw new Error(`Auto fee max must be between 0.0001 and ${MAX_PRIORITY_FEE_SOL} SOL`);
   }
   validateRpcUrl(getActiveRpcUrl(settings));
   validateJitoUrl(settings.jitoEndpoint);

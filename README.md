@@ -42,6 +42,7 @@ Default preset:
 - Sell buttons: `10%`, `30%`, `70%`, `100%`.
 - Hotkeys: `1`/`2`/`3`/`4` for buys, `Q`/`W`/`E`/`R` for sells.
 - Visible mode chips: signer mode, send mode, slippage, priority fee, Jito tip, protection.
+- Auto fee is enabled by default with `fast` level and a `0.003 SOL` cap.
 
 SOL balance and current token balance are fetched through the configured RPC. Realized PnL is tracked locally for trades executed through Trench by comparing pre-trade and post-trade SOL/WSOL/token balance deltas. The orders panel stores local Trench trade history with route, size, status, timestamp, error, and Solscan link when a signature is available.
 
@@ -136,6 +137,16 @@ https://mainnet.block-engine.jito.wtf/api/v1/transactions
 
 Jito's transaction endpoint forwards directly and uses `skip_preflight=true`. Trench keeps this as a separate mode because it trades simulation safety for speed. `bundleOnly=true` can be enabled from the options page.
 
+### Auto Fee
+
+Auto fee estimates a per-trade priority budget from `getRecentPrioritizationFees` on the active RPC. It samples recent priority fees, applies a level floor, then caps the total fee by `Auto max SOL`.
+
+- `normal`: lower floor and percentile for quieter slots.
+- `fast`: default Axiom-style setting for normal trading.
+- `turbo`: higher percentile and floor for congestion.
+
+In RPC mode, the auto budget becomes priority fee. In Jito mode, part of the capped budget is converted into an explicit Jito tip transfer instruction and the rest remains priority fee.
+
 ## Privacy Model
 
 Trench is local-first by default:
@@ -185,7 +196,6 @@ Axiom page
 - PnL starts from trades executed after the local ledger exists. Existing positions need historical fills before full cost basis can be reconstructed.
 - The orders panel is local browser history, not an exchange-side order book or indexer.
 - PumpSwap-specific post-migration routing is not implemented yet.
-- Jito tips are configured in UI but full integrated tip-instruction strategy still needs refinement.
 - The Trench RPC router service is configuration-ready, but the hosted router itself must be deployed separately.
 
 ## Development
@@ -214,6 +224,6 @@ Deploy the router behind HTTPS before using it as `Trench RPC router` in the ext
 
 - PumpSwap route detection and execution.
 - Hosted Trench RPC router with health scoring, rate limiting, and provider rotation.
-- Jito tip-floor helper and safer tip-instruction integration.
+- Jito tip-floor tuning from live block engine data.
 - Better transaction history and order tracking.
 - Optional Moralis/Shyft/Helius data adapters for metadata, balances, and history.

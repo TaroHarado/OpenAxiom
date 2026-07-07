@@ -15,6 +15,9 @@ export type TradeSettings = {
   slippage: number;
   priorityFee: number;
   jitoTip: number;
+  autoFee: boolean;
+  autoFeeLevel: 'normal' | 'fast' | 'turbo';
+  autoFeeMax: number;
   protection: boolean;
   confirmation: boolean;
   hotkeys: boolean;

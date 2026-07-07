@@ -176,12 +176,27 @@ function OptionsApp() {
               <input type="number" min="0" max="50" value={settings.slippage} onChange={(event) => patch({ slippage: Number(event.target.value) })} />
             </Field>
             <Field label="Priority fee SOL">
-              <input type="number" min="0" max="0.1" step="0.0001" value={settings.priorityFee} onChange={(event) => patch({ priorityFee: Number(event.target.value) })} />
+              <input type="number" min="0" max="0.1" step="0.0001" value={settings.priorityFee} disabled={settings.autoFee} onChange={(event) => patch({ priorityFee: Number(event.target.value) })} />
             </Field>
           </div>
-          <Field label="Jito tip SOL">
-            <input type="number" min="0" max="0.1" step="0.0001" value={settings.jitoTip} onChange={(event) => patch({ jitoTip: Number(event.target.value) })} />
-          </Field>
+          <div className="two-col">
+            <Field label="Jito tip SOL">
+              <input type="number" min="0" max="0.1" step="0.0001" value={settings.jitoTip} disabled={settings.autoFee} onChange={(event) => patch({ jitoTip: Number(event.target.value) })} />
+            </Field>
+            <Field label="Auto max SOL">
+              <input type="number" min="0.0001" max="0.1" step="0.0001" value={settings.autoFeeMax} disabled={!settings.autoFee} onChange={(event) => patch({ autoFeeMax: Number(event.target.value) })} />
+            </Field>
+          </div>
+          <div className="two-col">
+            <Field label="Auto level">
+              <select value={settings.autoFeeLevel} disabled={!settings.autoFee} onChange={(event) => patch({ autoFeeLevel: event.target.value as TradeSettings['autoFeeLevel'] })}>
+                <option value="normal">Normal</option>
+                <option value="fast">Fast</option>
+                <option value="turbo">Turbo</option>
+              </select>
+            </Field>
+            <Toggle label="Auto fee" checked={settings.autoFee} onChange={(value) => patch({ autoFee: value })} />
+          </div>
         </Panel>
 
         <Panel icon={<ShieldCheck size={18} />} title="Controls">

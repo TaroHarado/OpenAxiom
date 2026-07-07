@@ -10,6 +10,7 @@ import {
 import { Buffer } from 'buffer';
 import type { TradeRequest, TradeResponse } from './types';
 import { getActiveRpcUrl, usesTrenchRouting } from './storage';
+import { createJitoTipInstruction } from './jito';
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const BASIS_POINTS = 10_000n;
@@ -98,6 +99,8 @@ export async function preparePumpTrade(request: TradeRequest): Promise<TradeResp
     ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
     ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFeeToMicroLamports(request.settings.priorityFee) })
   ];
+  const jitoTipInstruction = createJitoTipInstruction(state.user, request.settings);
+  if (jitoTipInstruction) instructions.push(jitoTipInstruction);
 
   if (request.side === 'buy') {
     const grossQuoteIn = solToLamports(request.amount);
@@ -514,7 +517,7 @@ function minBigInt(a: bigint, b: bigint) {
 
 function priorityFeeToMicroLamports(priorityFeeSol: number) {
   if (!Number.isFinite(priorityFeeSol) || priorityFeeSol <= 0) return 1;
-  return Math.max(1, Math.round((priorityFeeSol * LAMPORTS_PER_SOL) / 400_000));
+  return Math.max(1, Math.round((priorityFeeSol * LAMPORTS_PER_SOL * 1_000_000) / 400_000));
 }
 
 function calculateTrenchFee(amountLamports: bigint, request: TradeRequest) {

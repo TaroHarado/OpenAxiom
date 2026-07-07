@@ -474,8 +474,8 @@ function TradeSection(props: {
         <ParamChip title="RPC mode"><Zap size={12} /> {settings.rpcMode === 'trench' ? 'Trench 0.1%' : 'Custom 0%'}</ParamChip>
         <ParamChip title="Send mode"><Zap size={12} /> {settings.sendMode === 'jito' ? 'Jito' : 'RPC'}</ParamChip>
         <ParamChip title="Slippage"><Target size={12} /> {settings.slippage}%</ParamChip>
-        <ParamChip title="Priority fee"><Zap size={12} /> {settings.priorityFee}</ParamChip>
-        <ParamChip title="Jito tip"><GripHorizontal size={12} /> {settings.jitoTip}</ParamChip>
+        <ParamChip title="Priority fee"><Zap size={12} /> {settings.autoFee ? `Auto ${settings.autoFeeLevel}` : settings.priorityFee}</ParamChip>
+        <ParamChip title="Jito tip"><GripHorizontal size={12} /> {settings.autoFee ? `Max ${settings.autoFeeMax}` : settings.jitoTip}</ParamChip>
         <ParamChip title="Protection"><ShieldCheck size={12} /> {settings.protection ? 'On' : 'Off'}</ParamChip>
       </div>
     </section>
@@ -503,11 +503,23 @@ function SettingsPanel(props: { settings: TradeSettings; onChange: (patch: Parti
         </label>
         <label>
           <span>Priority</span>
-          <input type="number" step="0.001" value={settings.priorityFee} onChange={(event) => onChange({ priorityFee: Number(event.target.value) })} />
+          <input type="number" step="0.001" value={settings.priorityFee} disabled={settings.autoFee} onChange={(event) => onChange({ priorityFee: Number(event.target.value) })} />
         </label>
         <label>
           <span>Jito tip</span>
-          <input type="number" step="0.001" value={settings.jitoTip} onChange={(event) => onChange({ jitoTip: Number(event.target.value) })} />
+          <input type="number" step="0.001" value={settings.jitoTip} disabled={settings.autoFee} onChange={(event) => onChange({ jitoTip: Number(event.target.value) })} />
+        </label>
+        <label>
+          <span>Auto level</span>
+          <select value={settings.autoFeeLevel} disabled={!settings.autoFee} onChange={(event) => onChange({ autoFeeLevel: event.target.value as TradeSettings['autoFeeLevel'] })}>
+            <option value="normal">Normal</option>
+            <option value="fast">Fast</option>
+            <option value="turbo">Turbo</option>
+          </select>
+        </label>
+        <label>
+          <span>Auto max</span>
+          <input type="number" step="0.0001" value={settings.autoFeeMax} disabled={!settings.autoFee} onChange={(event) => onChange({ autoFeeMax: Number(event.target.value) })} />
         </label>
         <label>
           <span>Signer</span>
@@ -557,6 +569,10 @@ function SettingsPanel(props: { settings: TradeSettings; onChange: (patch: Parti
             <option value="pump">Pump</option>
             <option value="auto">Auto</option>
           </select>
+        </label>
+        <label className="tw-toggle-row">
+          <span>Auto fee</span>
+          <input type="checkbox" checked={settings.autoFee} onChange={(event) => onChange({ autoFee: event.target.checked })} />
         </label>
         <label className="tw-toggle-row">
           <span>Protection</span>
