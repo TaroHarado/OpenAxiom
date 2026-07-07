@@ -90,15 +90,11 @@ async function prepareTrade(request: TradeRequest): Promise<TradeResponse> {
     }
   }
 
-  if (request.side === 'sell') {
-    throw new Error('Jupiter sell needs indexed token balance; switch Engine to Pump for bonding-curve sells');
-  }
-
-  const amountLamports = Math.round(request.amount * LAMPORTS_PER_SOL);
+  const amount = request.side === 'buy' ? String(Math.round(request.amount * LAMPORTS_PER_SOL)) : await getJupiterSellAmount(request);
   const quote = await fetchJupiterQuote({
-    inputMint: SOL_MINT,
-    outputMint: mint,
-    amount: amountLamports,
+    inputMint: request.side === 'buy' ? SOL_MINT : mint,
+    outputMint: request.side === 'buy' ? mint : SOL_MINT,
+    amount,
     slippageBps: Math.round(request.settings.slippage * 100)
   });
 
@@ -119,8 +115,17 @@ async function prepareTrade(request: TradeRequest): Promise<TradeResponse> {
     route: 'jupiter',
     swapTransaction: swap.swapTransaction,
     lastValidBlockHeight: swap.lastValidBlockHeight,
-    quoteSummary: `${request.amount} SOL via Jupiter`
+    quoteSummary: request.side === 'buy' ? `${request.amount} SOL via Jupiter` : `${request.amount}% via Jupiter`
   };
+}
+
+async function getJupiterSellAmount(request: TradeRequest) {
+  const token = await getTokenBalance(request);
+  if (token.rawAmount <= 0n) throw new Error('No token balance available to sell');
+  const sellBps = BigInt(Math.round(request.amount * 100));
+  const rawAmount = (token.rawAmount * sellBps) / 10_000n;
+  if (rawAmount <= 0n) throw new Error('Sell amount is below token precision');
+  return rawAmount.toString();
 }
 
 async function getPosition(request: PositionRequest): Promise<PositionResponse> {
@@ -139,7 +144,7 @@ async function getPosition(request: PositionRequest): Promise<PositionResponse> 
   };
 }
 
-async function getTokenBalance(request: PositionRequest) {
+async function getTokenBalance(request: Pick<PositionRequest, 'wallet' | 'mint' | 'settings'>) {
   const response = await rpcRequest<TokenAccountsByOwnerResponse>(request.settings.rpcUrl, 'getTokenAccountsByOwner', [
     request.wallet,
     { mint: request.mint },
@@ -147,15 +152,17 @@ async function getTokenBalance(request: PositionRequest) {
   ]);
   const accounts = response.value ?? [];
   let amount = 0;
+  let rawAmount = 0n;
   let decimals = 0;
 
   for (const account of accounts) {
     const tokenAmount = account.account.data.parsed.info.tokenAmount;
     amount += Number(tokenAmount.uiAmount ?? 0);
+    rawAmount += BigInt(tokenAmount.amount);
     decimals = tokenAmount.decimals;
   }
 
-  return { amount, decimals };
+  return { amount, rawAmount, decimals };
 }
 
 async function signAndSendLocal(request: SignAndSendLocalRequest): Promise<TradeResponse> {
@@ -379,6 +386,7 @@ type TokenAccountsByOwnerResponse = {
         parsed: {
           info: {
             tokenAmount: {
+              amount: string;
               decimals: number;
               uiAmount: number | null;
             };
@@ -441,7 +449,7 @@ function bytesToBase64(bytes: Uint8Array) {
   return btoa(binary);
 }
 
-async function fetchJupiterQuote(params: { inputMint: string; outputMint: string; amount: number; slippageBps: number }) {
+async function fetchJupiterQuote(params: { inputMint: string; outputMint: string; amount: string; slippageBps: number }) {
   const url = new URL(JUPITER_QUOTE_URL);
   url.searchParams.set('inputMint', params.inputMint);
   url.searchParams.set('outputMint', params.outputMint);

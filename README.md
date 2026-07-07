@@ -7,7 +7,7 @@ Trench is an open-source Chrome extension that adds a compact trading terminal o
 - Injects a draggable 320px trading widget into `https://axiom.trade/*`.
 - Detects the current token/mint from the Axiom page when possible.
 - Supports Pump bonding-curve buy/sell through a lightweight manual Pump V2 instruction builder.
-- Supports Jupiter buy routing for migrated/routable tokens.
+- Supports Jupiter buy/sell routing for migrated/routable tokens.
 - Supports Auto mode: try Pump first, fall back to Jupiter when the curve is complete or missing.
 - Supports normal RPC send with preflight simulation.
 - Supports optional Jito low-latency send through the Block Engine transaction endpoint.
@@ -160,7 +160,6 @@ Axiom page
 ## Current Limits
 
 - PnL and order list are UI placeholders.
-- Jupiter sell needs real token balance indexing.
 - PumpSwap-specific post-migration routing is not implemented yet.
 - Jito tips are configured in UI but full integrated tip-instruction strategy still needs refinement.
 
@@ -175,8 +174,6 @@ Build output goes to `dist/`, which can be loaded as an unpacked Chrome extensio
 
 ## Roadmap
 
-- Real wallet balance and token position indexing.
-- Jupiter sell path for migrated tokens.
 - PumpSwap route detection and execution.
 - Jito tip-floor helper and safer tip-instruction integration.
 - Better transaction history and order tracking.
