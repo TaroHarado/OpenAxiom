@@ -9,6 +9,7 @@ import {
 } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 import type { TradeRequest, TradeResponse } from './types';
+import { getActiveRpcUrl, usesTrenchRouting } from './storage';
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const BASIS_POINTS = 10_000n;
@@ -27,6 +28,8 @@ const FEE_CONFIG_DISCRIMINATOR = [143, 52, 146, 187, 219, 123, 76, 155];
 const BUY_EXACT_QUOTE_IN_V2_DISCRIMINATOR = [194, 171, 28, 70, 104, 77, 91, 47];
 const SELL_V2_DISCRIMINATOR = [93, 246, 130, 60, 231, 233, 64, 178];
 const CREATE_ATA_IDEMPOTENT_DISCRIMINATOR = 1;
+const SPL_TOKEN_TRANSFER_INSTRUCTION = 3;
+const TRENCH_FEE_BPS = 10n;
 
 const STATIC_BUYBACK_FEE_RECIPIENTS = [
   '5YxQFdt3Tr9zJLvkFccqXVUwhdTWJQc1fFg2YPbxvxeD',
@@ -97,7 +100,9 @@ export async function preparePumpTrade(request: TradeRequest): Promise<TradeResp
   ];
 
   if (request.side === 'buy') {
-    const spendableQuoteIn = solToLamports(request.amount);
+    const grossQuoteIn = solToLamports(request.amount);
+    const feeLamports = calculateTrenchFee(grossQuoteIn, request);
+    const spendableQuoteIn = grossQuoteIn - feeLamports;
     const expectedTokensOut = getBuyTokenAmountFromQuoteAmount(state, spendableQuoteIn);
     const minTokensOut = applySlippageFloor(expectedTokensOut, request.settings.slippage);
 
@@ -105,9 +110,10 @@ export async function preparePumpTrade(request: TradeRequest): Promise<TradeResp
 
     const associatedUser = getAssociatedTokenAddress(state.mint, state.user, state.tokenProgram);
     instructions.push(createAssociatedTokenAccountIdempotentInstruction(state.user, associatedUser, state.user, state.mint, state.tokenProgram));
+    if (feeLamports > 0n) instructions.push(SystemProgram.transfer({ fromPubkey: state.user, toPubkey: getTrenchFeeRecipient(request), lamports: Number(feeLamports) }));
     instructions.push(createBuyExactQuoteInV2Instruction(state, spendableQuoteIn, minTokensOut, associatedUser));
 
-    return buildUnsignedTransaction(state.connection, state.user, instructions, `Pump buy ${request.amount} SOL`);
+    return buildUnsignedTransaction(state.connection, state.user, instructions, feeLamports > 0n ? `Pump buy ${request.amount} SOL incl. 0.1% Trench fee` : `Pump buy ${request.amount} SOL`);
   }
 
   const tokenBalance = await getUserTokenBalance(state.connection, state.mint, state.user, state.tokenProgram);
@@ -120,16 +126,23 @@ export async function preparePumpTrade(request: TradeRequest): Promise<TradeResp
   const minSolOutput = applySlippageFloor(expectedQuoteOut, request.settings.slippage);
   if (minSolOutput <= 0n) throw new Error('Pump quote returned zero SOL');
 
+  const feeLamports = calculateTrenchFee(minSolOutput, request);
+  if (feeLamports > 0n) {
+    const treasury = getTrenchFeeRecipient(request);
+    instructions.push(createAssociatedTokenAccountIdempotentInstruction(state.user, getAssociatedTokenAddress(NATIVE_MINT, state.user, TOKEN_PROGRAM_ID), state.user, NATIVE_MINT, TOKEN_PROGRAM_ID));
+    instructions.push(createAssociatedTokenAccountIdempotentInstruction(state.user, getAssociatedTokenAddress(NATIVE_MINT, treasury, TOKEN_PROGRAM_ID), treasury, NATIVE_MINT, TOKEN_PROGRAM_ID));
+  }
   instructions.push(createSellV2Instruction(state, amount, minSolOutput));
+  if (feeLamports > 0n) instructions.push(createTokenTransferInstruction(getAssociatedTokenAddress(NATIVE_MINT, state.user, TOKEN_PROGRAM_ID), getAssociatedTokenAddress(NATIVE_MINT, getTrenchFeeRecipient(request), TOKEN_PROGRAM_ID), state.user, feeLamports));
 
-  return buildUnsignedTransaction(state.connection, state.user, instructions, `Pump sell ${request.amount}%`);
+  return buildUnsignedTransaction(state.connection, state.user, instructions, feeLamports > 0n ? `Pump sell ${request.amount}% incl. 0.1% Trench fee` : `Pump sell ${request.amount}%`);
 }
 
 async function resolvePumpState(request: TradeRequest): Promise<PumpState> {
   if (!request.mint) throw new Error('Token mint not found');
   if (!request.wallet) throw new Error('Wallet not connected');
 
-  const connection = new Connection(request.settings.rpcUrl, 'confirmed');
+  const connection = new Connection(getActiveRpcUrl(request.settings), 'confirmed');
   const mint = new PublicKey(request.mint);
   const user = new PublicKey(request.wallet);
   const tokenProgram = await resolveTokenProgram(connection, mint);
@@ -232,6 +245,14 @@ function createAssociatedTokenAccountIdempotentInstruction(
       accountMeta(tokenProgram)
     ],
     data: Buffer.from(Uint8Array.of(CREATE_ATA_IDEMPOTENT_DISCRIMINATOR))
+  });
+}
+
+function createTokenTransferInstruction(source: PublicKey, destination: PublicKey, owner: PublicKey, amount: bigint) {
+  return new TransactionInstruction({
+    programId: TOKEN_PROGRAM_ID,
+    keys: [accountMeta(source, true), accountMeta(destination, true), accountMeta(owner, false, true)],
+    data: Buffer.from(encodeInstruction([SPL_TOKEN_TRANSFER_INSTRUCTION], [amount]))
   });
 }
 
@@ -494,6 +515,15 @@ function minBigInt(a: bigint, b: bigint) {
 function priorityFeeToMicroLamports(priorityFeeSol: number) {
   if (!Number.isFinite(priorityFeeSol) || priorityFeeSol <= 0) return 1;
   return Math.max(1, Math.round((priorityFeeSol * LAMPORTS_PER_SOL) / 400_000));
+}
+
+function calculateTrenchFee(amountLamports: bigint, request: TradeRequest) {
+  return usesTrenchRouting(request.settings) ? (amountLamports * TRENCH_FEE_BPS) / BASIS_POINTS : 0n;
+}
+
+function getTrenchFeeRecipient(request: TradeRequest) {
+  if (!request.settings.trenchFeeRecipient) throw new Error('Trench RPC mode requires a fee recipient public key');
+  return new PublicKey(request.settings.trenchFeeRecipient);
 }
 
 function bytes(value: string) {

@@ -18,7 +18,10 @@ export type TradeSettings = {
   protection: boolean;
   confirmation: boolean;
   hotkeys: boolean;
+  rpcMode: 'custom' | 'trench';
   rpcUrl: string;
+  trenchRpcUrl: string;
+  trenchFeeRecipient: string;
   signerMode: 'wallet' | 'local';
   localWalletPublicKey: string;
   sendMode: 'rpc' | 'jito';

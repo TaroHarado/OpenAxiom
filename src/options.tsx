@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { CheckCircle2, ExternalLink, Gauge, KeyRound, RotateCcw, Save, ShieldCheck, SlidersHorizontal, Zap } from 'lucide-react';
-import { defaultSettings, HELIUS_RPC_TEMPLATE, JITO_MAINNET_TRANSACTION_URL, loadExtensionSettings, PUBLIC_TEST_RPC_URL, resetExtensionSettings, saveExtensionSettings, SHYFT_RPC_TEMPLATE } from './storage';
+import { defaultSettings, getActiveRpcUrl, HELIUS_RPC_TEMPLATE, JITO_MAINNET_TRANSACTION_URL, loadExtensionSettings, PUBLIC_TEST_RPC_URL, resetExtensionSettings, saveExtensionSettings, SHYFT_RPC_TEMPLATE, TRENCH_RPC_URL } from './storage';
 import type { HotWalletResponse, TradeSettings } from './types';
 import './options.css';
 
@@ -41,7 +41,7 @@ function OptionsApp() {
     setRpcStatus({ state: 'testing', text: 'Testing RPC...' });
 
     try {
-      const result = await measureRpc(settings.rpcUrl);
+      const result = await measureRpc(getActiveRpcUrl(settings));
       setRpcStatus({ state: 'ok', text: `${result.health} / slot ${result.slot.toLocaleString()} / ${result.ms} ms` });
     } catch (error) {
       setRpcStatus({ state: 'error', text: error instanceof Error ? error.message : 'RPC test failed' });
@@ -114,10 +114,23 @@ function OptionsApp() {
           <Field label="RPC URL">
             <input value={settings.rpcUrl} onChange={(event) => patch({ rpcUrl: event.target.value })} />
           </Field>
+          <Field label="RPC mode">
+            <select value={settings.rpcMode} onChange={(event) => patch({ rpcMode: event.target.value as TradeSettings['rpcMode'] })}>
+              <option value="custom">Custom RPC, 0% Trench fee</option>
+              <option value="trench">Trench RPC, 0.1% routing fee</option>
+            </select>
+          </Field>
+          <Field label="Trench RPC router">
+            <input value={settings.trenchRpcUrl} onChange={(event) => patch({ trenchRpcUrl: event.target.value })} />
+          </Field>
+          <Field label="Trench fee recipient">
+            <input value={settings.trenchFeeRecipient} onChange={(event) => patch({ trenchFeeRecipient: event.target.value })} placeholder="Treasury public key" />
+          </Field>
           <div className="button-stack">
             <button className="ghost" type="button" onClick={() => patch({ rpcUrl: PUBLIC_TEST_RPC_URL })}>Use public Solana RPC</button>
             <button className="ghost" type="button" onClick={() => patch({ rpcUrl: HELIUS_RPC_TEMPLATE })}>Use Helius template</button>
             <button className="ghost" type="button" onClick={() => patch({ rpcUrl: SHYFT_RPC_TEMPLATE })}>Use Shyft template</button>
+            <button className="ghost" type="button" onClick={() => patch({ rpcMode: 'trench', trenchRpcUrl: TRENCH_RPC_URL })}>Use Trench RPC</button>
             <button className="ghost" type="button" onClick={testRpc}><Gauge size={15} /> Test RPC</button>
           </div>
           <div className={`rpc-result rpc-${rpcStatus.state}`}>{rpcStatus.text}</div>
@@ -181,7 +194,7 @@ function OptionsApp() {
       <section className="info-grid">
         <article className="info-panel">
           <h2><KeyRound size={18} /> Free keys</h2>
-          <p>Use public Solana RPC without a key for quick tests. For steadier free-tier endpoints, create a developer key at one of these providers and paste the full URL above.</p>
+          <p>Use Custom RPC with your own endpoint for 0% Trench fee. Trench RPC routes through a shared RPC pool and applies a transparent 0.1% routing fee.</p>
           <div className="link-list">
             <ProviderLink href="https://dashboard.helius.dev/" label="Helius" note="Solana RPC free developer tier" />
             <ProviderLink href="https://shyft.to/get-api-key" label="Shyft" note="Solana RPC API key" />
@@ -195,8 +208,8 @@ function OptionsApp() {
           <div className="flow-list">
             <div><strong>Settings</strong><span>RPC URLs, API keys, and encrypted hot-wallet data stay in Chrome `storage.local` on this device.</span></div>
             <div><strong>Signing</strong><span>Browser wallet mode uses Phantom/Solflare. Hot-wallet mode signs locally inside the extension after unlock.</span></div>
-            <div><strong>Execution</strong><span>Signed transactions go directly from this browser to your selected RPC or Jito endpoint.</span></div>
-            <div><strong>Backend</strong><span>There is no Trench server, proxy, telemetry pipeline, or hosted transaction processor.</span></div>
+            <div><strong>Execution</strong><span>Custom RPC sends directly to your endpoint. Trench RPC sends to the configured router and applies the disclosed routing fee.</span></div>
+            <div><strong>Backend</strong><span>Custom mode has no Trench backend. Trench RPC mode depends on the configured router.</span></div>
           </div>
         </article>
       </section>

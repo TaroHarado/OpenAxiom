@@ -10,6 +10,7 @@ export const PUBLIC_TEST_RPC_URL = 'https://api.mainnet-beta.solana.com';
 export const HELIUS_RPC_TEMPLATE = 'https://mainnet.helius-rpc.com/?api-key=';
 export const SHYFT_RPC_TEMPLATE = 'https://rpc.shyft.to?api_key=';
 export const JITO_MAINNET_TRANSACTION_URL = 'https://mainnet.block-engine.jito.wtf/api/v1/transactions';
+export const TRENCH_RPC_URL = 'https://rpc.trench.trade/rpc';
 
 export const defaultSettings: TradeSettings = {
   buyAmounts: [0.0005, 0.5, 2, 5],
@@ -22,7 +23,10 @@ export const defaultSettings: TradeSettings = {
   protection: true,
   confirmation: false,
   hotkeys: true,
+  rpcMode: 'custom',
   rpcUrl: PUBLIC_TEST_RPC_URL,
+  trenchRpcUrl: TRENCH_RPC_URL,
+  trenchFeeRecipient: '',
   signerMode: 'wallet',
   localWalletPublicKey: '',
   sendMode: 'rpc',
@@ -39,7 +43,7 @@ export function loadSettings(): TradeSettings {
 
   try {
     const parsed = JSON.parse(raw) as Partial<TradeSettings>;
-    return { ...defaultSettings, ...parsed };
+    return normalizeSettings(parsed);
   } catch {
     return defaultSettings;
   }
@@ -56,7 +60,7 @@ export async function loadExtensionSettings(): Promise<TradeSettings> {
 
 export function saveSettings(settings: TradeSettings) {
   const normalized = normalizeSettings(settings);
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(normalized));
   void getChromeStorage()?.set({ [SETTINGS_KEY]: normalized });
 }
 
@@ -109,7 +113,10 @@ function normalizeSettings(settings?: Partial<TradeSettings>): TradeSettings {
     slippage: clampNumber(merged.slippage, 0, 50, defaultSettings.slippage),
     priorityFee: clampNumber(merged.priorityFee, 0, 0.1, defaultSettings.priorityFee),
     jitoTip: clampNumber(merged.jitoTip, 0, 0.1, defaultSettings.jitoTip),
+    rpcMode: ['custom', 'trench'].includes(merged.rpcMode) ? merged.rpcMode : defaultSettings.rpcMode,
     rpcUrl: typeof merged.rpcUrl === 'string' && merged.rpcUrl.trim() ? merged.rpcUrl.trim() : PUBLIC_TEST_RPC_URL,
+    trenchRpcUrl: typeof merged.trenchRpcUrl === 'string' && merged.trenchRpcUrl.trim() ? merged.trenchRpcUrl.trim() : TRENCH_RPC_URL,
+    trenchFeeRecipient: typeof merged.trenchFeeRecipient === 'string' ? merged.trenchFeeRecipient.trim() : '',
     signerMode: ['wallet', 'local'].includes(merged.signerMode) ? merged.signerMode : defaultSettings.signerMode,
     localWalletPublicKey: typeof merged.localWalletPublicKey === 'string' ? merged.localWalletPublicKey : '',
     sendMode: ['rpc', 'jito'].includes(merged.sendMode) ? merged.sendMode : defaultSettings.sendMode,
@@ -117,6 +124,14 @@ function normalizeSettings(settings?: Partial<TradeSettings>): TradeSettings {
     jitoBundleOnly: Boolean(merged.jitoBundleOnly),
     executionMode: ['jupiter', 'pump', 'auto'].includes(merged.executionMode) ? merged.executionMode : defaultSettings.executionMode
   };
+}
+
+export function getActiveRpcUrl(settings: TradeSettings) {
+  return settings.rpcMode === 'trench' ? settings.trenchRpcUrl : settings.rpcUrl;
+}
+
+export function usesTrenchRouting(settings: TradeSettings) {
+  return settings.rpcMode === 'trench';
 }
 
 function normalizeNumberList(value: unknown, fallback: number[], maxLength: number) {

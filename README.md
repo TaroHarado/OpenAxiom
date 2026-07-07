@@ -1,6 +1,6 @@
 # Trench
 
-Trench is an open-source Chrome extension that adds a compact trading terminal on top of Axiom. It is built for fast Solana memecoin execution: small floating UI, local settings, local signing, direct RPC/Jito submission, and no hosted Trench backend.
+Trench is an open-source Chrome extension that adds a compact trading terminal on top of Axiom. It is built for fast Solana memecoin execution: small floating UI, local settings, local signing, direct RPC/Jito submission, and an optional managed Trench RPC mode.
 
 ## What It Does
 
@@ -12,8 +12,9 @@ Trench is an open-source Chrome extension that adds a compact trading terminal o
 - Supports normal RPC send with preflight simulation.
 - Supports optional Jito low-latency send through the Block Engine transaction endpoint.
 - Supports browser-wallet signing or local hot-wallet signing without approval popups.
+- Supports Custom RPC with `0%` Trench fee or Trench RPC with a disclosed `0.1%` routing fee.
 - Reads SOL balance and current token balance through the configured RPC.
-- Stores settings locally in Chrome. Trench does not run a server.
+- Stores settings locally in Chrome. Custom RPC mode does not use a Trench backend.
 
 ## Quick Start
 
@@ -46,6 +47,11 @@ SOL balance and current token balance are fetched through the configured RPC. Pn
 
 ## Free RPC Keys
 
+Trench has two RPC modes:
+
+- Custom RPC: paste your own endpoint and pay `0%` Trench fee.
+- Trench RPC: use the configured Trench router and pay a transparent `0.1%` routing fee.
+
 The public Solana RPC works for quick tests:
 
 ```text
@@ -61,7 +67,18 @@ For steadier free-tier endpoints, create a key and paste the full URL into the o
 
 Moralis is kept as a data API candidate for metadata, balances, and history. It is not used as the trading RPC send path unless a real Solana JSON-RPC endpoint is configured.
 
-API keys stay in Chrome local storage on your machine. They are not sent to a Trench backend.
+API keys stay in Chrome local storage on your machine. In Custom RPC mode, signed transactions go directly to your selected endpoint. In Trench RPC mode, signed transactions go to the configured Trench router.
+
+## Routing Fee
+
+Trench RPC mode applies a `0.1%` routing fee, which is 10 basis points.
+
+- Jupiter buy: Trench routes 99.9% of the SOL input through Jupiter and adds a same-transaction SOL transfer for the 0.1% fee.
+- Jupiter sell: Trench uses Jupiter `platformFeeBps=10` with a treasury WSOL token account.
+- Pump buy: Trench sends 99.9% of the SOL input to Pump and adds a same-transaction SOL transfer for the 0.1% fee.
+- Pump sell: Trench sells through Pump, then transfers 0.1% of the slippage-protected minimum SOL output from the user's WSOL account to the treasury WSOL account in the same transaction.
+
+Custom RPC mode does not add a Trench routing fee.
 
 ## Signing Modes
 
@@ -117,16 +134,17 @@ Jito's transaction endpoint forwards directly and uses `skip_preflight=true`. Tr
 
 ## Privacy Model
 
-Trench is local-first:
+Trench is local-first by default:
 
-- No Trench backend.
-- No Trench proxy.
+- No Trench backend in Custom RPC mode.
+- No Trench proxy in Custom RPC mode.
 - No telemetry pipeline.
 - No hosted transaction processor.
 - RPC URLs and API keys stay in Chrome `storage.local`.
 - Encrypted hot-wallet data stays in Chrome `storage.local`.
 - Unlocked hot-wallet bytes stay in Chrome `storage.session`.
-- Signed transactions go directly from your browser to your configured RPC or Jito endpoint.
+- Signed transactions go directly from your browser to your configured RPC/Jito endpoint in Custom mode.
+- Signed transactions go to the configured Trench router in Trench RPC mode.
 
 Trench must not:
 
@@ -155,6 +173,7 @@ Axiom page
 - Keep serious RPC keys out of git and paste them only into local extension settings.
 - Jito low-latency mode skips preflight by design. Use RPC preflight when testing a new route.
 - Public Solana RPC is rate-limited and only suitable for quick checks.
+- Trench RPC mode needs a valid treasury public key configured before trades can be prepared.
 - The Pump path avoids `@pump-fun/pump-sdk`, `@solana/spl-token`, and direct `bn.js` runtime dependencies to keep the extension bundle smaller and easier to audit.
 
 ## Current Limits
@@ -162,6 +181,7 @@ Axiom page
 - PnL and order list are UI placeholders.
 - PumpSwap-specific post-migration routing is not implemented yet.
 - Jito tips are configured in UI but full integrated tip-instruction strategy still needs refinement.
+- The Trench RPC router service is configuration-ready, but the hosted router itself must be deployed separately.
 
 ## Development
 
@@ -172,9 +192,23 @@ npm run build
 
 Build output goes to `dist/`, which can be loaded as an unpacked Chrome extension.
 
+Run a local RPC router process for deployment testing:
+
+```bash
+TRENCH_RPC_UPSTREAMS="https://api.mainnet-beta.solana.com,https://your-helius-url" npm run router
+```
+
+The router exposes:
+
+- `POST /rpc`: JSON-RPC proxy with upstream retry and scoring.
+- `GET /health`: redacted upstream status.
+
+Deploy the router behind HTTPS before using it as `Trench RPC router` in the extension. Chrome extension validation requires an HTTPS RPC URL.
+
 ## Roadmap
 
 - PumpSwap route detection and execution.
+- Hosted Trench RPC router with health scoring, rate limiting, and provider rotation.
 - Jito tip-floor helper and safer tip-instruction integration.
 - Better transaction history and order tracking.
 - Optional Moralis/Shyft/Helius data adapters for metadata, balances, and history.

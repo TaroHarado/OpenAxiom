@@ -429,6 +429,7 @@ function TradeSection(props: {
 
       <div className="tw-param-row">
         <ParamChip title="Signer"><Wallet size={12} /> {settings.signerMode === 'local' ? 'Hot' : 'Wallet'}</ParamChip>
+        <ParamChip title="RPC mode"><Zap size={12} /> {settings.rpcMode === 'trench' ? 'Trench 0.1%' : 'Custom 0%'}</ParamChip>
         <ParamChip title="Send mode"><Zap size={12} /> {settings.sendMode === 'jito' ? 'Jito' : 'RPC'}</ParamChip>
         <ParamChip title="Slippage"><Target size={12} /> {settings.slippage}%</ParamChip>
         <ParamChip title="Priority fee"><Zap size={12} /> {settings.priorityFee}</ParamChip>
@@ -478,8 +479,23 @@ function SettingsPanel(props: { settings: TradeSettings; onChange: (patch: Parti
           <input value={settings.localWalletPublicKey} readOnly />
         </label>
         <label>
+          <span>RPC mode</span>
+          <select value={settings.rpcMode} onChange={(event) => onChange({ rpcMode: event.target.value as TradeSettings['rpcMode'] })}>
+            <option value="custom">Custom RPC, 0%</option>
+            <option value="trench">Trench RPC, 0.1%</option>
+          </select>
+        </label>
+        <label>
           <span>RPC URL</span>
           <input value={settings.rpcUrl} onChange={(event) => onChange({ rpcUrl: event.target.value })} />
+        </label>
+        <label>
+          <span>Trench router</span>
+          <input value={settings.trenchRpcUrl} onChange={(event) => onChange({ trenchRpcUrl: event.target.value })} />
+        </label>
+        <label>
+          <span>Fee recipient</span>
+          <input value={settings.trenchFeeRecipient} onChange={(event) => onChange({ trenchFeeRecipient: event.target.value })} />
         </label>
         <label>
           <span>Send mode</span>

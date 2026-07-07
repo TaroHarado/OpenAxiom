@@ -1,6 +1,8 @@
-import { Keypair, VersionedTransaction } from '@solana/web3.js';
+import { AddressLookupTableAccount, Keypair, PublicKey, SystemProgram, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
+import { Buffer } from 'buffer';
 import type { HotWalletRequest, HotWalletResponse, PositionRequest, PositionResponse, SendSignedTransactionRequest, SignAndSendLocalRequest, TradeRequest, TradeResponse } from './types';
 import { preparePumpTrade } from './pumpEngine';
+import { getActiveRpcUrl, usesTrenchRouting } from './storage';
 
 declare const chrome: {
   runtime: {
@@ -25,11 +27,16 @@ type ChromeStorageArea = {
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const JUPITER_QUOTE_URL = 'https://quote-api.jup.ag/v6/quote';
 const JUPITER_SWAP_URL = 'https://quote-api.jup.ag/v6/swap';
+const JUPITER_SWAP_INSTRUCTIONS_URL = 'https://quote-api.jup.ag/v6/swap-instructions';
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const PUBLIC_KEY_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const MAX_BUY_SOL = 100;
 const MAX_PRIORITY_FEE_SOL = 0.1;
 const MAX_SLIPPAGE_PERCENT = 50;
+const TRENCH_FEE_BPS = 10;
+const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+const CREATE_ATA_IDEMPOTENT_DISCRIMINATOR = 1;
 const HOT_WALLET_STORAGE_KEY = 'trench.hotWallet.v1';
 const HOT_WALLET_SESSION_KEY = 'trench.hotWallet.session.v1';
 
@@ -77,6 +84,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 async function prepareTrade(request: TradeRequest): Promise<TradeResponse> {
   validateTradeRequest(request);
   const mint = request.mint as string;
+  const feeRecipient = getTrenchFeeRecipient(request.settings);
 
   if (request.settings.executionMode === 'pump') {
     return preparePumpTrade(request);
@@ -90,13 +98,27 @@ async function prepareTrade(request: TradeRequest): Promise<TradeResponse> {
     }
   }
 
-  const amount = request.side === 'buy' ? String(Math.round(request.amount * LAMPORTS_PER_SOL)) : await getJupiterSellAmount(request);
+  const trenchFeeLamports = feeRecipient && request.side === 'buy' ? calculateTrenchFee(BigInt(Math.round(request.amount * LAMPORTS_PER_SOL))).toString() : '0';
+  const spendLamports = BigInt(Math.round(request.amount * LAMPORTS_PER_SOL)) - BigInt(trenchFeeLamports);
+  const amount = request.side === 'buy' ? spendLamports.toString() : await getJupiterSellAmount(request);
   const quote = await fetchJupiterQuote({
     inputMint: request.side === 'buy' ? SOL_MINT : mint,
     outputMint: request.side === 'buy' ? mint : SOL_MINT,
     amount,
-    slippageBps: Math.round(request.settings.slippage * 100)
+    slippageBps: Math.round(request.settings.slippage * 100),
+    platformFeeBps: feeRecipient && request.side === 'sell' ? TRENCH_FEE_BPS : 0
   });
+
+  if (feeRecipient) {
+    const swap = await buildJupiterSwapWithFee(request, quote, feeRecipient, BigInt(trenchFeeLamports));
+    return {
+      ok: true,
+      route: 'jupiter',
+      swapTransaction: swap.swapTransaction,
+      lastValidBlockHeight: swap.lastValidBlockHeight,
+      quoteSummary: request.side === 'buy' ? `${request.amount} SOL via Jupiter incl. 0.1% Trench fee` : `${request.amount}% via Jupiter incl. 0.1% Trench fee`
+    };
+  }
 
   const swap = await fetchJson<{ swapTransaction: string; lastValidBlockHeight?: number }>(JUPITER_SWAP_URL, {
     method: 'POST',
@@ -119,6 +141,42 @@ async function prepareTrade(request: TradeRequest): Promise<TradeResponse> {
   };
 }
 
+async function buildJupiterSwapWithFee(request: TradeRequest, quote: unknown, feeRecipient: string, feeLamports: bigint) {
+  const feeAccount = request.side === 'sell' ? getAssociatedTokenAddress(SOL_MINT, feeRecipient) : undefined;
+  const response = await fetchJson<JupiterSwapInstructionsResponse>(JUPITER_SWAP_INSTRUCTIONS_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      quoteResponse: quote,
+      userPublicKey: request.wallet,
+      feeAccount,
+      wrapAndUnwrapSol: true,
+      dynamicComputeUnitLimit: true,
+      prioritizationFeeLamports: request.settings.priorityFee > 0 ? Math.round(request.settings.priorityFee * LAMPORTS_PER_SOL) : undefined
+    })
+  });
+
+  const payer = new PublicKey(request.wallet);
+  const treasury = new PublicKey(feeRecipient);
+  const computeBudgetInstructions = response.computeBudgetInstructions ?? [];
+  const setupInstructions = response.setupInstructions ?? [];
+  const addressLookupTableAddresses = response.addressLookupTableAddresses ?? [];
+  const instructions = [
+    ...computeBudgetInstructions.map(decodeJupiterInstruction),
+    ...(request.side === 'buy' && feeLamports > 0n ? [SystemProgram.transfer({ fromPubkey: payer, toPubkey: treasury, lamports: Number(feeLamports) })] : []),
+    ...(request.side === 'sell' ? [createAssociatedTokenAccountIdempotentInstruction(payer, new PublicKey(feeAccount as string), treasury, new PublicKey(SOL_MINT))] : []),
+    ...setupInstructions.map(decodeJupiterInstruction),
+    decodeJupiterInstruction(response.swapInstruction),
+    ...(response.cleanupInstruction ? [decodeJupiterInstruction(response.cleanupInstruction)] : [])
+  ];
+  const lookupTables = await loadAddressLookupTables(getActiveRpcUrl(request.settings), addressLookupTableAddresses);
+  const blockhash = await rpcRequest<{ value: { blockhash: string; lastValidBlockHeight: number } }>(getActiveRpcUrl(request.settings), 'getLatestBlockhash', [{ commitment: 'confirmed' }]);
+  const message = new TransactionMessage({ payerKey: payer, recentBlockhash: blockhash.value.blockhash, instructions }).compileToV0Message(lookupTables);
+  const transaction = new VersionedTransaction(message);
+
+  return { swapTransaction: bytesToBase64(transaction.serialize()), lastValidBlockHeight: blockhash.value.lastValidBlockHeight };
+}
+
 async function getJupiterSellAmount(request: TradeRequest) {
   const token = await getTokenBalance(request);
   if (token.rawAmount <= 0n) throw new Error('No token balance available to sell');
@@ -130,9 +188,9 @@ async function getJupiterSellAmount(request: TradeRequest) {
 
 async function getPosition(request: PositionRequest): Promise<PositionResponse> {
   if (!isPublicKeyString(request.wallet)) throw new Error('Wallet not connected');
-  validateRpcUrl(request.settings.rpcUrl);
+  validateRpcUrl(getActiveRpcUrl(request.settings));
 
-  const balance = await rpcRequest<{ value?: number } | number>(request.settings.rpcUrl, 'getBalance', [request.wallet, { commitment: 'processed' }]);
+  const balance = await rpcRequest<{ value?: number } | number>(getActiveRpcUrl(request.settings), 'getBalance', [request.wallet, { commitment: 'processed' }]);
   const lamports = typeof balance === 'number' ? balance : balance.value ?? 0;
   const token = request.mint && isPublicKeyString(request.mint) ? await getTokenBalance(request) : { amount: 0, decimals: 0 };
 
@@ -145,7 +203,7 @@ async function getPosition(request: PositionRequest): Promise<PositionResponse> 
 }
 
 async function getTokenBalance(request: Pick<PositionRequest, 'wallet' | 'mint' | 'settings'>) {
-  const response = await rpcRequest<TokenAccountsByOwnerResponse>(request.settings.rpcUrl, 'getTokenAccountsByOwner', [
+  const response = await rpcRequest<TokenAccountsByOwnerResponse>(getActiveRpcUrl(request.settings), 'getTokenAccountsByOwner', [
     request.wallet,
     { mint: request.mint },
     { encoding: 'jsonParsed', commitment: 'processed' }
@@ -189,9 +247,9 @@ async function sendSignedTransaction(request: SendSignedTransactionRequest): Pro
   if (!request.signedTransaction) throw new Error('Missing signed transaction');
   if (request.settings.sendMode === 'jito') return sendJitoTransaction(request);
 
-  validateRpcUrl(request.settings.rpcUrl);
+  validateRpcUrl(getActiveRpcUrl(request.settings));
 
-  const result = await fetchJson<{ result?: string; error?: { message?: string } }>(request.settings.rpcUrl, {
+  const result = await fetchJson<{ result?: string; error?: { message?: string } }>(getActiveRpcUrl(request.settings), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -261,8 +319,9 @@ function validateTradeRequest(request: TradeRequest) {
   if (!Number.isFinite(settings.jitoTip) || settings.jitoTip < 0 || settings.jitoTip > MAX_PRIORITY_FEE_SOL) {
     throw new Error(`Jito tip must be between 0 and ${MAX_PRIORITY_FEE_SOL} SOL`);
   }
-  validateRpcUrl(settings.rpcUrl);
+  validateRpcUrl(getActiveRpcUrl(settings));
   validateJitoUrl(settings.jitoEndpoint);
+  getTrenchFeeRecipient(settings);
 }
 
 function validateRpcUrl(rawUrl: string) {
@@ -278,7 +337,7 @@ function validateRpcUrl(rawUrl: string) {
 }
 
 function isAllowedRpcHost(hostname: string) {
-  return hostname === 'api.mainnet-beta.solana.com' || hostname === 'mainnet.helius-rpc.com' || hostname === 'rpc.shyft.to' || hostname.endsWith('.helius-rpc.com') || hostname.endsWith('.quiknode.pro');
+  return hostname === 'api.mainnet-beta.solana.com' || hostname === 'mainnet.helius-rpc.com' || hostname === 'rpc.shyft.to' || hostname === 'rpc.trench.trade' || hostname.endsWith('.helius-rpc.com') || hostname.endsWith('.quiknode.pro') || hostname.endsWith('.trench.trade');
 }
 
 function validateJitoUrl(rawUrl: string) {
@@ -397,6 +456,20 @@ type TokenAccountsByOwnerResponse = {
   }>;
 };
 
+type JupiterInstruction = {
+  programId: string;
+  accounts: Array<{ pubkey: string; isSigner: boolean; isWritable: boolean }>;
+  data: string;
+};
+
+type JupiterSwapInstructionsResponse = {
+  computeBudgetInstructions?: JupiterInstruction[];
+  setupInstructions?: JupiterInstruction[];
+  swapInstruction: JupiterInstruction;
+  cleanupInstruction?: JupiterInstruction;
+  addressLookupTableAddresses?: string[];
+};
+
 function parseSecretKey(value: string) {
   const trimmed = value.trim();
   const parsed = JSON.parse(trimmed) as unknown;
@@ -449,16 +522,71 @@ function bytesToBase64(bytes: Uint8Array) {
   return btoa(binary);
 }
 
-async function fetchJupiterQuote(params: { inputMint: string; outputMint: string; amount: string; slippageBps: number }) {
+async function fetchJupiterQuote(params: { inputMint: string; outputMint: string; amount: string; slippageBps: number; platformFeeBps?: number }) {
   const url = new URL(JUPITER_QUOTE_URL);
   url.searchParams.set('inputMint', params.inputMint);
   url.searchParams.set('outputMint', params.outputMint);
   url.searchParams.set('amount', String(params.amount));
   url.searchParams.set('slippageBps', String(params.slippageBps));
+  if (params.platformFeeBps) url.searchParams.set('platformFeeBps', String(params.platformFeeBps));
   url.searchParams.set('onlyDirectRoutes', 'false');
   url.searchParams.set('asLegacyTransaction', 'false');
 
   return fetchJson<unknown>(url.toString());
+}
+
+function getTrenchFeeRecipient(settings: TradeRequest['settings']) {
+  if (!usesTrenchRouting(settings)) return null;
+  if (!isPublicKeyString(settings.trenchFeeRecipient)) throw new Error('Trench RPC mode requires a fee recipient public key');
+  return settings.trenchFeeRecipient;
+}
+
+function getAssociatedTokenAddress(mint: string, owner: string) {
+  return PublicKey.findProgramAddressSync(
+    [new PublicKey(owner).toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), new PublicKey(mint).toBuffer()],
+    ASSOCIATED_TOKEN_PROGRAM_ID
+  )[0].toBase58();
+}
+
+function decodeJupiterInstruction(instruction: JupiterInstruction) {
+  return new TransactionInstruction({
+    programId: new PublicKey(instruction.programId),
+    keys: instruction.accounts.map((account) => ({ pubkey: new PublicKey(account.pubkey), isSigner: account.isSigner, isWritable: account.isWritable })),
+    data: Buffer.from(base64ToBytes(instruction.data))
+  });
+}
+
+function createAssociatedTokenAccountIdempotentInstruction(payer: PublicKey, ata: PublicKey, owner: PublicKey, mint: PublicKey) {
+  return new TransactionInstruction({
+    programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+    keys: [
+      { pubkey: payer, isWritable: true, isSigner: true },
+      { pubkey: ata, isWritable: true, isSigner: false },
+      { pubkey: owner, isWritable: false, isSigner: false },
+      { pubkey: mint, isWritable: false, isSigner: false },
+      { pubkey: SystemProgram.programId, isWritable: false, isSigner: false },
+      { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false }
+    ],
+    data: Buffer.from(Uint8Array.of(CREATE_ATA_IDEMPOTENT_DISCRIMINATOR))
+  });
+}
+
+async function loadAddressLookupTables(rpcUrl: string, addresses: string[]) {
+  if (!addresses.length) return [];
+  const response = await rpcRequest<{ value: Array<{ data?: [string, string]; executable: boolean; lamports: number; owner: string; rentEpoch: number } | null> }>(
+    rpcUrl,
+    'getMultipleAccounts',
+    [addresses, { encoding: 'base64', commitment: 'confirmed' }]
+  );
+
+  return response.value.flatMap((account, index) => {
+    if (!account?.data?.[0]) return [];
+    return [new AddressLookupTableAccount({ key: new PublicKey(addresses[index]), state: AddressLookupTableAccount.deserialize(base64ToBytes(account.data[0])) })];
+  });
+}
+
+function calculateTrenchFee(amountLamports: bigint) {
+  return (amountLamports * BigInt(TRENCH_FEE_BPS)) / 10_000n;
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
