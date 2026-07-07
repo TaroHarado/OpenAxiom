@@ -5,10 +5,21 @@ import { defaultSettings, getActiveRpcUrl, HELIUS_RPC_TEMPLATE, JITO_MAINNET_TRA
 import type { HotWalletResponse, IndexHistoryResponse, TradeSettings } from './types';
 import './options.css';
 
+type Tab = 'rpc' | 'fees' | 'wallet' | 'controls' | 'history';
+
+const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
+  { id: 'rpc',      label: 'RPC',      icon: <Zap size={14} /> },
+  { id: 'fees',     label: 'Fees',     icon: <SlidersHorizontal size={14} /> },
+  { id: 'wallet',   label: 'Wallet',   icon: <KeyRound size={14} /> },
+  { id: 'controls', label: 'Controls', icon: <ShieldCheck size={14} /> },
+  { id: 'history',  label: 'History',  icon: <History size={14} /> },
+];
+
 function OptionsApp() {
+  const [tab, setTab] = useState<Tab>('rpc');
   const [settings, setSettings] = useState<TradeSettings>(defaultSettings);
-  const [status, setStatus] = useState('Loading settings');
-  const [rpcStatus, setRpcStatus] = useState<RpcStatus>({ state: 'idle', text: 'Not tested' });
+  const [saved, setSaved] = useState(true);
+  const [rpcStatus, setRpcStatus] = useState<{ state: 'idle' | 'testing' | 'ok' | 'error'; text: string }>({ state: 'idle', text: '' });
   const [secretKey, setSecretKey] = useState('');
   const [password, setPassword] = useState('');
   const [hotWallet, setHotWallet] = useState<HotWalletResponse>({ ok: true, hasWallet: false, unlocked: false });
@@ -17,336 +28,435 @@ function OptionsApp() {
   const [indexStatus, setIndexStatus] = useState<{ state: 'idle' | 'running' | 'ok' | 'error'; text: string }>({ state: 'idle', text: '' });
 
   useEffect(() => {
-    void loadExtensionSettings().then((loaded) => {
-      setSettings(loaded);
-      setStatus('Ready');
-    });
+    void loadExtensionSettings().then(setSettings);
     void hotWalletRequest({ type: 'TRENCH_HOT_WALLET_STATUS' }).then(setHotWallet);
   }, []);
 
-  function patch(patchValue: Partial<TradeSettings>) {
-    setSettings((current) => ({ ...current, ...patchValue }));
-    setStatus('Unsaved changes');
+  function patch(p: Partial<TradeSettings>) {
+    setSettings(s => ({ ...s, ...p }));
+    setSaved(false);
   }
 
   async function save() {
     await saveExtensionSettings(settings);
-    setStatus('Saved');
+    setSaved(true);
   }
 
   async function reset() {
-    const defaults = await resetExtensionSettings();
-    setSettings(defaults);
-    setStatus('Reset to defaults');
+    const d = await resetExtensionSettings();
+    setSettings(d);
+    setSaved(true);
   }
 
   async function testRpc() {
-    setRpcStatus({ state: 'testing', text: 'Testing RPC...' });
-
+    setRpcStatus({ state: 'testing', text: 'Testing…' });
     try {
-      const result = await measureRpc(getActiveRpcUrl(settings));
-      setRpcStatus({ state: 'ok', text: `${result.health} / slot ${result.slot.toLocaleString()} / ${result.ms} ms` });
-    } catch (error) {
-      setRpcStatus({ state: 'error', text: error instanceof Error ? error.message : 'RPC test failed' });
+      const r = await measureRpc(getActiveRpcUrl(settings));
+      setRpcStatus({ state: 'ok', text: `${r.health} · slot ${r.slot.toLocaleString()} · ${r.ms} ms` });
+    } catch (e) {
+      setRpcStatus({ state: 'error', text: e instanceof Error ? e.message : 'failed' });
     }
   }
 
   async function importHotWallet() {
-    const result = await hotWalletRequest({ type: 'TRENCH_HOT_WALLET_IMPORT', secretKey, password });
-    setHotWallet(result);
+    const r = await hotWalletRequest({ type: 'TRENCH_HOT_WALLET_IMPORT', secretKey, password });
+    setHotWallet(r);
     setSecretKey('');
     setPassword('');
-    if (result.publicKey) await applyAndSave({ signerMode: 'local', localWalletPublicKey: result.publicKey });
-    setStatus(result.ok ? 'Hot wallet imported' : result.error ?? 'Hot wallet import failed');
+    if (r.publicKey) await applyAndSave({ signerMode: 'local', localWalletPublicKey: r.publicKey });
   }
 
   async function unlockHotWallet() {
-    const result = await hotWalletRequest({ type: 'TRENCH_HOT_WALLET_UNLOCK', password });
-    setHotWallet(result);
+    const r = await hotWalletRequest({ type: 'TRENCH_HOT_WALLET_UNLOCK', password });
+    setHotWallet(r);
     setPassword('');
-    if (result.publicKey) await applyAndSave({ signerMode: 'local', localWalletPublicKey: result.publicKey });
-    setStatus(result.ok ? 'Hot wallet unlocked' : result.error ?? 'Hot wallet unlock failed');
+    if (r.publicKey) await applyAndSave({ signerMode: 'local', localWalletPublicKey: r.publicKey });
   }
 
   async function lockHotWallet() {
-    const result = await hotWalletRequest({ type: 'TRENCH_HOT_WALLET_LOCK' });
-    setHotWallet(result);
-    setStatus('Hot wallet locked');
+    setHotWallet(await hotWalletRequest({ type: 'TRENCH_HOT_WALLET_LOCK' }));
   }
 
   async function forgetHotWallet() {
-    const result = await hotWalletRequest({ type: 'TRENCH_HOT_WALLET_FORGET' });
-    setHotWallet(result);
+    setHotWallet(await hotWalletRequest({ type: 'TRENCH_HOT_WALLET_FORGET' }));
     await applyAndSave({ signerMode: 'wallet', localWalletPublicKey: '' });
-    setStatus('Hot wallet forgotten');
   }
 
-  async function applyAndSave(patchValue: Partial<TradeSettings>) {
-    const next = { ...settings, ...patchValue };
+  async function applyAndSave(p: Partial<TradeSettings>) {
+    const next = { ...settings, ...p };
     setSettings(next);
     await saveExtensionSettings(next);
+    setSaved(true);
   }
 
   async function indexHistory() {
     const wallet = indexWallet.trim() || settings.localWalletPublicKey;
     const mint = indexMint.trim();
-    if (!wallet) { setIndexStatus({ state: 'error', text: 'No wallet address. Enter wallet or import hot wallet.' }); return; }
-    if (!mint) { setIndexStatus({ state: 'error', text: 'Enter a token mint address.' }); return; }
-    setIndexStatus({ state: 'running', text: 'Scanning...' });
+    if (!wallet) { setIndexStatus({ state: 'error', text: 'No wallet address.' }); return; }
+    if (!mint)   { setIndexStatus({ state: 'error', text: 'Enter token mint.' }); return; }
+    setIndexStatus({ state: 'running', text: 'Scanning…' });
     try {
-      const result = await new Promise<IndexHistoryResponse>((resolve) => {
-        chrome.runtime.sendMessage({ type: 'TRENCH_INDEX_HISTORY', wallet, mint, settings }, (r: unknown) => resolve(r as IndexHistoryResponse));
-      });
-      if (result.ok) {
-        setIndexStatus({ state: 'ok', text: `Scanned ${result.scanned} txs — ${result.matched} matched. Cost basis: ${result.costBasisSol.toFixed(4)} SOL, PnL: ${result.realizedPnlSol.toFixed(4)} SOL` });
-      } else {
-        setIndexStatus({ state: 'error', text: result.error ?? 'Index failed' });
-      }
-    } catch (err) {
-      setIndexStatus({ state: 'error', text: err instanceof Error ? err.message : 'Index failed' });
+      const r = await new Promise<IndexHistoryResponse>(res =>
+        chrome.runtime.sendMessage({ type: 'TRENCH_INDEX_HISTORY', wallet, mint, settings }, (x: unknown) => res(x as IndexHistoryResponse))
+      );
+      setIndexStatus(r.ok
+        ? { state: 'ok',    text: `${r.scanned} txs scanned · ${r.matched} matched · cost basis ${r.costBasisSol.toFixed(4)} SOL · PnL ${r.realizedPnlSol.toFixed(4)} SOL` }
+        : { state: 'error', text: r.error ?? 'failed' });
+    } catch (e) {
+      setIndexStatus({ state: 'error', text: e instanceof Error ? e.message : 'failed' });
     }
   }
 
+  const walletLine = hotWallet.unlocked
+    ? `Unlocked · ${shortKey(hotWallet.publicKey)}`
+    : hotWallet.hasWallet
+    ? `Locked · ${shortKey(hotWallet.publicKey)}`
+    : 'Not imported';
+
   return (
-    <main className="options-shell">
-      <section className="hero">
-        <div>
-          <p className="eyebrow">Trench for Axiom</p>
-          <h1>Execution Settings</h1>
-          <p className="subcopy">Configure the floating trading overlay. Use browser-wallet approval mode, or import a local hot wallet for no-popup execution.</p>
+    <main className="opt-shell">
+      {/* Header */}
+      <header className="opt-header">
+        <div className="opt-logo">TR</div>
+        <div className="opt-title-block">
+          <span className="opt-eyebrow">Trench for Axiom</span>
+          <span className="opt-title">Settings</span>
         </div>
-        <div className="status-pill"><CheckCircle2 size={16} /> {status}</div>
-      </section>
+        <div className="opt-header-right">
+          {!saved && <span className="opt-unsaved">Unsaved</span>}
+          <button className="opt-btn-ghost" onClick={reset}><RotateCcw size={13} /> Reset</button>
+          <button className="opt-btn-primary" onClick={save}><Save size={13} /> Save</button>
+        </div>
+      </header>
 
-      <section className="settings-layout">
-        <Panel icon={<Zap size={18} />} title="Execution">
-          <Field label="Engine">
-            <select value={settings.executionMode} onChange={(event) => patch({ executionMode: event.target.value as TradeSettings['executionMode'] })}>
-              <option value="jupiter">Jupiter</option>
-              <option value="pump">Pump</option>
-              <option value="auto">Auto</option>
-            </select>
-          </Field>
-          <Field label="Signer">
-            <select value={settings.signerMode} onChange={(event) => patch({ signerMode: event.target.value as TradeSettings['signerMode'] })}>
-              <option value="wallet">Browser wallet approval</option>
-              <option value="local">Local hot wallet</option>
-            </select>
-          </Field>
-          <div className="rpc-result rpc-idle">Hot wallet: {hotWallet.unlocked ? `unlocked ${shortKey(hotWallet.publicKey)}` : hotWallet.hasWallet ? `locked ${shortKey(hotWallet.publicKey)}` : 'not imported'}</div>
-          <Field label="RPC URL">
-            <input value={settings.rpcUrl} onChange={(event) => patch({ rpcUrl: event.target.value })} />
-          </Field>
-          <Field label="RPC mode">
-            <select value={settings.rpcMode} onChange={(event) => patch({ rpcMode: event.target.value as TradeSettings['rpcMode'] })}>
-              <option value="custom">Custom RPC, 0% Trench fee</option>
-              <option value="trench">Trench RPC, 0.1% routing fee</option>
-            </select>
-          </Field>
-          <Field label="Trench RPC router">
-            <input value={settings.trenchRpcUrl} onChange={(event) => patch({ trenchRpcUrl: event.target.value })} />
-          </Field>
-          <Field label="Trench fee recipient">
-            <input value={settings.trenchFeeRecipient} onChange={(event) => patch({ trenchFeeRecipient: event.target.value })} placeholder="Treasury public key" />
-          </Field>
-          <div className="button-stack">
-            <button className="ghost" type="button" onClick={() => patch({ rpcUrl: PUBLIC_TEST_RPC_URL })}>Use public Solana RPC</button>
-            <button className="ghost" type="button" onClick={() => patch({ rpcUrl: HELIUS_RPC_TEMPLATE })}>Use Helius template</button>
-            <button className="ghost" type="button" onClick={() => patch({ rpcUrl: SHYFT_RPC_TEMPLATE })}>Use Shyft template</button>
-            <button className="ghost" type="button" onClick={() => patch({ rpcMode: 'trench', trenchRpcUrl: TRENCH_RPC_URL })}>Use Trench RPC</button>
-            <button className="ghost" type="button" onClick={testRpc}><Gauge size={15} /> Test RPC</button>
-          </div>
-          <div className={`rpc-result rpc-${rpcStatus.state}`}>{rpcStatus.text}</div>
-          <Field label="Send mode">
-            <select value={settings.sendMode} onChange={(event) => patch({ sendMode: event.target.value as TradeSettings['sendMode'] })}>
-              <option value="rpc">RPC preflight</option>
-              <option value="jito">Jito low latency</option>
-            </select>
-          </Field>
-          <Field label="Jito endpoint">
-            <input value={settings.jitoEndpoint} onChange={(event) => patch({ jitoEndpoint: event.target.value })} />
-          </Field>
-          <div className="button-stack">
-            <button className="ghost" type="button" onClick={() => patch({ jitoEndpoint: JITO_MAINNET_TRANSACTION_URL })}>Use Jito mainnet</button>
-          </div>
-          <Toggle label="Jito bundleOnly" checked={settings.jitoBundleOnly} onChange={(value) => patch({ jitoBundleOnly: value })} />
-        </Panel>
+      {/* Tabs */}
+      <nav className="opt-tabs">
+        {TABS.map(t => (
+          <button
+            key={t.id}
+            className={`opt-tab${tab === t.id ? ' opt-tab-active' : ''}`}
+            onClick={() => setTab(t.id)}
+          >
+            {t.icon}{t.label}
+          </button>
+        ))}
+      </nav>
 
-        <Panel icon={<KeyRound size={18} />} title="Hot Wallet">
-          <div className="wallet-callout">Instant trading requires Local hot wallet. Browser wallet mode will always ask Phantom/Solflare for approval.</div>
-          <Field label="Secret key">
-            <textarea value={secretKey} onChange={(event) => setSecretKey(event.target.value)} placeholder={'base58 private key, 0x hex, comma/space bytes, [12,34,...], or {"secretKey":[...]}'} spellCheck={false} />
-          </Field>
-          <Field label="Local password">
-            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
-          </Field>
-          <div className="button-stack">
-            <button className="ghost" type="button" onClick={importHotWallet}>Import and unlock</button>
-            <button className="ghost" type="button" onClick={unlockHotWallet}>Unlock</button>
-            <button className="ghost" type="button" onClick={lockHotWallet}>Lock</button>
-            <button className="ghost danger" type="button" onClick={forgetHotWallet}>Forget local wallet</button>
-          </div>
-        </Panel>
+      {/* Panels */}
+      <div className="opt-body">
+        {tab === 'rpc' && (
+          <div className="opt-panel-grid">
+            <section className="opt-card">
+              <h3 className="opt-card-title">Engine &amp; Signer</h3>
+              <Row label="Engine">
+                <select value={settings.executionMode} onChange={e => patch({ executionMode: e.target.value as TradeSettings['executionMode'] })}>
+                  <option value="auto">Auto (detect Pump vs Jupiter)</option>
+                  <option value="jupiter">Jupiter</option>
+                  <option value="pump">Pump</option>
+                </select>
+              </Row>
+              <Row label="Signer">
+                <select value={settings.signerMode} onChange={e => patch({ signerMode: e.target.value as TradeSettings['signerMode'] })}>
+                  <option value="wallet">Browser wallet (Phantom / Solflare)</option>
+                  <option value="local">Local hot wallet (no popup)</option>
+                </select>
+              </Row>
+              <div className="opt-status-row">
+                <span className="opt-label">Hot wallet</span>
+                <span className={`opt-badge ${hotWallet.unlocked ? 'opt-badge-green' : hotWallet.hasWallet ? 'opt-badge-dim' : 'opt-badge-off'}`}>
+                  {walletLine}
+                </span>
+              </div>
+            </section>
 
-        <Panel icon={<SlidersHorizontal size={18} />} title="Preset P3">
-          <Field label="Buy amounts, SOL">
-            <input value={settings.buyAmounts.join(' ')} onChange={(event) => patch({ buyAmounts: parseNumberList(event.target.value, defaultSettings.buyAmounts, 4) })} />
-          </Field>
-          <Field label="Sell percentages">
-            <input value={settings.sellPercents.join(' ')} onChange={(event) => patch({ sellPercents: parseNumberList(event.target.value, defaultSettings.sellPercents, 4).map((value) => Math.min(100, value)) })} />
-          </Field>
-          <div className="two-col">
-            <Field label="Slippage %">
-              <input type="number" min="0" max="50" value={settings.slippage} onChange={(event) => patch({ slippage: Number(event.target.value) })} />
-            </Field>
-            <Field label="Priority fee SOL">
-              <input type="number" min="0" max="0.1" step="0.0001" value={settings.priorityFee} disabled={settings.autoFee} onChange={(event) => patch({ priorityFee: Number(event.target.value) })} />
-            </Field>
-          </div>
-          <div className="two-col">
-            <Field label="Jito tip SOL">
-              <input type="number" min="0" max="0.1" step="0.0001" value={settings.jitoTip} disabled={settings.autoFee} onChange={(event) => patch({ jitoTip: Number(event.target.value) })} />
-            </Field>
-            <Field label="Auto max SOL">
-              <input type="number" min="0.0001" max="0.1" step="0.0001" value={settings.autoFeeMax} disabled={!settings.autoFee} onChange={(event) => patch({ autoFeeMax: Number(event.target.value) })} />
-            </Field>
-          </div>
-          <div className="two-col">
-            <Field label="Auto level">
-              <select value={settings.autoFeeLevel} disabled={!settings.autoFee} onChange={(event) => patch({ autoFeeLevel: event.target.value as TradeSettings['autoFeeLevel'] })}>
-                <option value="normal">Normal</option>
-                <option value="fast">Fast</option>
-                <option value="turbo">Turbo</option>
-              </select>
-            </Field>
-            <Toggle label="Auto fee" checked={settings.autoFee} onChange={(value) => patch({ autoFee: value })} />
-          </div>
-        </Panel>
+            <section className="opt-card">
+              <h3 className="opt-card-title">RPC Endpoint</h3>
+              <Row label="URL">
+                <input value={settings.rpcUrl} onChange={e => patch({ rpcUrl: e.target.value })} spellCheck={false} />
+              </Row>
+              <Row label="Mode">
+                <select value={settings.rpcMode} onChange={e => patch({ rpcMode: e.target.value as TradeSettings['rpcMode'] })}>
+                  <option value="custom">Custom RPC — 0% Trench fee</option>
+                  <option value="trench">Trench RPC — 0.1% routing fee</option>
+                </select>
+              </Row>
+              <div className="opt-quick-btns">
+                <button className="opt-btn-ghost-sm" onClick={() => patch({ rpcUrl: PUBLIC_TEST_RPC_URL })}>Public</button>
+                <button className="opt-btn-ghost-sm" onClick={() => patch({ rpcUrl: HELIUS_RPC_TEMPLATE })}>Helius</button>
+                <button className="opt-btn-ghost-sm" onClick={() => patch({ rpcUrl: SHYFT_RPC_TEMPLATE })}>Shyft</button>
+                <button className="opt-btn-ghost-sm" onClick={() => patch({ rpcMode: 'trench', trenchRpcUrl: TRENCH_RPC_URL })}>Trench</button>
+                <button className="opt-btn-ghost-sm" onClick={testRpc}><Gauge size={12} /> Test</button>
+              </div>
+              {rpcStatus.text && <div className={`opt-result opt-result-${rpcStatus.state}`}>{rpcStatus.text}</div>}
+            </section>
 
-        <Panel icon={<ShieldCheck size={18} />} title="Controls">
-          <Toggle label="Protection" checked={settings.protection} onChange={(value) => patch({ protection: value })} />
-          <Toggle label="Confirmation" checked={settings.confirmation} onChange={(value) => patch({ confirmation: value })} />
-          <Toggle label="Hotkeys" checked={settings.hotkeys} onChange={(value) => patch({ hotkeys: value })} />
-        </Panel>
+            <section className="opt-card">
+              <h3 className="opt-card-title">Send Mode</h3>
+              <Row label="Mode">
+                <select value={settings.sendMode} onChange={e => patch({ sendMode: e.target.value as TradeSettings['sendMode'] })}>
+                  <option value="rpc">RPC (standard preflight)</option>
+                  <option value="jito">Jito (low-latency bundle)</option>
+                </select>
+              </Row>
+              <Row label="Jito endpoint">
+                <input value={settings.jitoEndpoint} onChange={e => patch({ jitoEndpoint: e.target.value })} spellCheck={false} />
+              </Row>
+              <div className="opt-quick-btns">
+                <button className="opt-btn-ghost-sm" onClick={() => patch({ jitoEndpoint: JITO_MAINNET_TRANSACTION_URL })}>Mainnet default</button>
+              </div>
+              <div className="opt-toggle-row">
+                <span className="opt-label">Bundle only (no fallback)</span>
+                <input type="checkbox" checked={settings.jitoBundleOnly} onChange={e => patch({ jitoBundleOnly: e.target.checked })} />
+              </div>
+            </section>
 
-        <Panel icon={<History size={18} />} title="Index wallet history">
-          <div className="wallet-callout">Scan your wallet&apos;s past transactions to recover cost basis and PnL for an existing position. Up to 200 recent transactions are scanned.</div>
-          <Field label="Wallet address">
-            <input value={indexWallet} onChange={(e) => setIndexWallet(e.target.value)} placeholder={settings.localWalletPublicKey || 'Enter wallet pubkey'} />
-          </Field>
-          <Field label="Token mint">
-            <input value={indexMint} onChange={(e) => setIndexMint(e.target.value)} placeholder="Token mint address" />
-          </Field>
-          <div className="button-stack">
-            <button className="ghost" type="button" onClick={() => void indexHistory()} disabled={indexStatus.state === 'running'}>
-              {indexStatus.state === 'running' ? 'Scanning...' : 'Index history'}
-            </button>
+            <section className="opt-card opt-card-info">
+              <h3 className="opt-card-title">Free RPC providers</h3>
+              <div className="opt-links">
+                <ProviderLink href="https://dashboard.helius.dev/" label="Helius" note="Free developer tier" />
+                <ProviderLink href="https://shyft.to/get-api-key" label="Shyft" note="API key required" />
+                <ProviderLink href="https://www.quicknode.com/" label="QuickNode" note="Free endpoint tier" />
+              </div>
+              <p className="opt-info-text">Custom RPC = 0% Trench fee. Trench RPC = 0.1% routing fee disclosed at send time.</p>
+            </section>
           </div>
-          {indexStatus.text && <div className={`rpc-result rpc-${indexStatus.state === 'running' ? 'testing' : indexStatus.state}`}>{indexStatus.text}</div>}
-        </Panel>
-      </section>
+        )}
 
-      <section className="info-grid">
-        <article className="info-panel">
-          <h2><KeyRound size={18} /> Free keys</h2>
-          <p>Use Custom RPC with your own endpoint for 0% Trench fee. Trench RPC routes through a shared RPC pool and applies a transparent 0.1% routing fee.</p>
-          <div className="link-list">
-            <ProviderLink href="https://dashboard.helius.dev/" label="Helius" note="Solana RPC free developer tier" />
-            <ProviderLink href="https://shyft.to/get-api-key" label="Shyft" note="Solana RPC API key" />
-            <ProviderLink href="https://www.quicknode.com/" label="QuickNode" note="Solana endpoint free tier" />
-            <ProviderLink href="https://admin.moralis.com/" label="Moralis" note="Data API for metadata, balances, history" />
+        {tab === 'fees' && (
+          <div className="opt-panel-grid">
+            <section className="opt-card">
+              <h3 className="opt-card-title">Quick-buy amounts (SOL)</h3>
+              <p className="opt-hint">Four values, space-separated. Maps to buttons 1–4 and hotkeys 1–4.</p>
+              <input
+                className="opt-input-full"
+                value={settings.buyAmounts.join(' ')}
+                onChange={e => patch({ buyAmounts: parseNumberList(e.target.value, defaultSettings.buyAmounts, 4) })}
+              />
+              <div className="opt-pill-preview">
+                {settings.buyAmounts.map((v, i) => <span key={i} className="opt-pill">{v}</span>)}
+              </div>
+            </section>
+
+            <section className="opt-card">
+              <h3 className="opt-card-title">Quick-sell percentages</h3>
+              <p className="opt-hint">Four values 1–100, space-separated. Maps to Q–R hotkeys.</p>
+              <input
+                className="opt-input-full"
+                value={settings.sellPercents.join(' ')}
+                onChange={e => patch({ sellPercents: parseNumberList(e.target.value, defaultSettings.sellPercents, 4).map(v => Math.min(100, v)) })}
+              />
+              <div className="opt-pill-preview">
+                {settings.sellPercents.map((v, i) => <span key={i} className="opt-pill">{v}%</span>)}
+              </div>
+            </section>
+
+            <section className="opt-card">
+              <h3 className="opt-card-title">Slippage &amp; Priority</h3>
+              <Row label="Slippage %">
+                <input type="number" min="0" max="50" value={settings.slippage} onChange={e => patch({ slippage: Number(e.target.value) })} />
+              </Row>
+              <div className="opt-toggle-row">
+                <span className="opt-label">Auto fee <span className="opt-sublabel">(override manual values)</span></span>
+                <input type="checkbox" checked={settings.autoFee} onChange={e => patch({ autoFee: e.target.checked })} />
+              </div>
+              <Row label="Auto level">
+                <select value={settings.autoFeeLevel} disabled={!settings.autoFee} onChange={e => patch({ autoFeeLevel: e.target.value as TradeSettings['autoFeeLevel'] })}>
+                  <option value="normal">Normal</option>
+                  <option value="fast">Fast</option>
+                  <option value="turbo">Turbo</option>
+                </select>
+              </Row>
+              <Row label={`Priority fee SOL${settings.autoFee ? ' (auto)' : ''}`}>
+                <input type="number" min="0" max="0.1" step="0.0001" value={settings.priorityFee} disabled={settings.autoFee} onChange={e => patch({ priorityFee: Number(e.target.value) })} />
+              </Row>
+              <Row label={`Jito tip SOL${settings.autoFee ? ' (auto)' : ''}`}>
+                <input type="number" min="0" max="0.1" step="0.0001" value={settings.jitoTip} disabled={settings.autoFee} onChange={e => patch({ jitoTip: Number(e.target.value) })} />
+              </Row>
+              <Row label="Auto fee max SOL">
+                <input type="number" min="0.0001" max="0.1" step="0.0001" value={settings.autoFeeMax} disabled={!settings.autoFee} onChange={e => patch({ autoFeeMax: Number(e.target.value) })} />
+              </Row>
+            </section>
           </div>
-        </article>
+        )}
 
-        <article className="info-panel">
-          <h2><ShieldCheck size={18} /> Local-only structure</h2>
-          <div className="flow-list">
-            <div><strong>Settings</strong><span>RPC URLs, API keys, and encrypted hot-wallet data stay in Chrome `storage.local` on this device.</span></div>
-            <div><strong>Signing</strong><span>Browser wallet mode uses Phantom/Solflare. Hot-wallet mode signs locally inside the extension after unlock.</span></div>
-            <div><strong>Execution</strong><span>Custom RPC sends directly to your endpoint. Trench RPC sends to the configured router and applies the disclosed routing fee.</span></div>
-            <div><strong>Backend</strong><span>Custom mode has no Trench backend. Trench RPC mode depends on the configured router.</span></div>
+        {tab === 'wallet' && (
+          <div className="opt-panel-grid">
+            <section className="opt-card">
+              <h3 className="opt-card-title">Hot wallet status</h3>
+              <div className={`opt-wallet-state ${hotWallet.unlocked ? 'opt-wallet-unlocked' : hotWallet.hasWallet ? 'opt-wallet-locked' : 'opt-wallet-none'}`}>
+                <div className="opt-wallet-state-dot" />
+                <div>
+                  <div className="opt-wallet-state-label">{hotWallet.unlocked ? 'Unlocked' : hotWallet.hasWallet ? 'Locked' : 'Not imported'}</div>
+                  {hotWallet.publicKey && <div className="opt-wallet-pubkey">{hotWallet.publicKey}</div>}
+                </div>
+              </div>
+              <div className="opt-wallet-actions">
+                {hotWallet.hasWallet && !hotWallet.unlocked && (
+                  <>
+                    <Row label="Password">
+                      <input type="password" value={password} onChange={e => setPassword(e.target.value)} />
+                    </Row>
+                    <button className="opt-btn-action" onClick={unlockHotWallet}>Unlock</button>
+                  </>
+                )}
+                {hotWallet.unlocked && (
+                  <button className="opt-btn-ghost-sm" onClick={lockHotWallet}>Lock</button>
+                )}
+                {hotWallet.hasWallet && (
+                  <button className="opt-btn-danger" onClick={forgetHotWallet}>Forget wallet</button>
+                )}
+              </div>
+            </section>
+
+            <section className="opt-card">
+              <h3 className="opt-card-title">Import new wallet</h3>
+              <div className="opt-callout">Instant no-popup signing. Key is encrypted with your password and stored locally in Chrome storage only.</div>
+              <Row label="Secret key">
+                <textarea
+                  value={secretKey}
+                  onChange={e => setSecretKey(e.target.value)}
+                  placeholder={'base58 · 0x hex · [12,34,...] · {"secretKey":[...]}'}
+                  spellCheck={false}
+                />
+              </Row>
+              <Row label="Password">
+                <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Encrypt with password" />
+              </Row>
+              <button className="opt-btn-action" onClick={importHotWallet}>Import and unlock</button>
+            </section>
+
+            <section className="opt-card opt-card-info">
+              <h3 className="opt-card-title">Local-only security</h3>
+              <div className="opt-flow">
+                <FlowItem title="Storage" body="Encrypted key lives in chrome.storage.local on this device only. Never sent anywhere." />
+                <FlowItem title="Signing" body="All signing happens inside the extension background worker. Raw key never leaves the extension." />
+                <FlowItem title="Session" body="Unlocked key bytes live only in chrome.storage.session — cleared on browser restart." />
+              </div>
+            </section>
           </div>
-        </article>
-      </section>
+        )}
 
-      <footer className="action-bar">
-        <button className="secondary" type="button" onClick={reset}><RotateCcw size={16} /> Reset</button>
-        <button className="primary" type="button" onClick={save}><Save size={16} /> Save settings</button>
+        {tab === 'controls' && (
+          <div className="opt-panel-grid opt-panel-grid-narrow">
+            <section className="opt-card">
+              <h3 className="opt-card-title">Trade controls</h3>
+              <ToggleRow label="Confirmation dialog" sub="Show confirm before every trade" checked={settings.confirmation} onChange={v => patch({ confirmation: v })} />
+              <ToggleRow label="MEV protection" sub="Adds slippage guard on buy" checked={settings.protection} onChange={v => patch({ protection: v })} />
+              <ToggleRow label="Hotkeys" sub="1–4 buy · Q/W/E/R sell" checked={settings.hotkeys} onChange={v => patch({ hotkeys: v })} />
+            </section>
+          </div>
+        )}
+
+        {tab === 'history' && (
+          <div className="opt-panel-grid">
+            <section className="opt-card">
+              <h3 className="opt-card-title">Index wallet history</h3>
+              <p className="opt-hint">Scan up to 200 recent transactions to recover cost basis and realized PnL for an existing position.</p>
+              <Row label="Wallet address">
+                <input value={indexWallet} onChange={e => setIndexWallet(e.target.value)} placeholder={settings.localWalletPublicKey || 'Wallet public key'} spellCheck={false} />
+              </Row>
+              <Row label="Token mint">
+                <input value={indexMint} onChange={e => setIndexMint(e.target.value)} placeholder="Token mint address" spellCheck={false} />
+              </Row>
+              <button className="opt-btn-action" disabled={indexStatus.state === 'running'} onClick={() => void indexHistory()}>
+                {indexStatus.state === 'running' ? 'Scanning…' : 'Scan history'}
+              </button>
+              {indexStatus.text && <div className={`opt-result opt-result-${indexStatus.state === 'running' ? 'testing' : indexStatus.state}`}>{indexStatus.text}</div>}
+            </section>
+
+            <section className="opt-card opt-card-info">
+              <h3 className="opt-card-title">How it works</h3>
+              <div className="opt-flow">
+                <FlowItem title="Scan" body="Fetches up to 200 confirmed transactions for your wallet from the configured RPC." />
+                <FlowItem title="Match" body="Filters Jupiter and Pump swap instructions that involve the token mint." />
+                <FlowItem title="Recover" body="Reconstructs cost basis and realized PnL from pre/post token balance deltas." />
+                <FlowItem title="Save" body="Writes recovered data to local storage so the widget shows correct PnL from first load." />
+              </div>
+            </section>
+          </div>
+        )}
+      </div>
+
+      <footer className="opt-footer">
+        <CheckCircle2 size={13} className={saved ? 'opt-saved-icon' : 'opt-saved-icon opt-saved-dim'} />
+        <span className="opt-footer-text">{saved ? 'All changes saved' : 'Unsaved changes'}</span>
+        <button className="opt-btn-ghost" onClick={reset}><RotateCcw size={13} /> Reset</button>
+        <button className="opt-btn-primary" onClick={save}><Save size={13} /> Save</button>
       </footer>
     </main>
   );
 }
 
-type RpcStatus = {
-  state: 'idle' | 'testing' | 'ok' | 'error';
-  text: string;
-};
-
-async function measureRpc(rpcUrl: string) {
-  const start = performance.now();
-  const health = await rpcCall<string>(rpcUrl, 'getHealth');
-  const slot = await rpcCall<number>(rpcUrl, 'getSlot');
-  return { health, slot, ms: Math.round(performance.now() - start) };
-}
-
-async function rpcCall<T>(rpcUrl: string, method: string): Promise<T> {
-  const response = await fetch(rpcUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: `trench-${method}`, method })
-  });
-  const payload = (await response.json().catch(() => null)) as { result?: T; error?: { message?: string } } | null;
-
-  if (!response.ok) throw new Error(payload?.error?.message ?? `HTTP ${response.status}`);
-  if (payload?.error) throw new Error(payload.error.message ?? 'RPC returned an error');
-  if (payload?.result === undefined) throw new Error('RPC returned no result');
-  return payload.result;
-}
-
-function hotWalletRequest(message: unknown): Promise<HotWalletResponse> {
-  return new Promise((resolve) => {
-    chrome.runtime.sendMessage(message, (response: unknown) => resolve(response as HotWalletResponse));
-  });
-}
-
-function shortKey(value?: string) {
-  return value ? `${value.slice(0, 4)}...${value.slice(-4)}` : '';
-}
-
-function Panel(props: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
+function Row(props: { label: string; children: React.ReactNode }) {
   return (
-    <section className="panel">
-      <h2>{props.icon}{props.title}</h2>
+    <label className="opt-row">
+      <span className="opt-label">{props.label}</span>
       {props.children}
-    </section>
+    </label>
   );
 }
 
-function Field(props: { label: string; children: React.ReactNode }) {
-  return <label className="field"><span>{props.label}</span>{props.children}</label>;
-}
-
-function Toggle(props: { label: string; checked: boolean; onChange: (checked: boolean) => void }) {
+function ToggleRow(props: { label: string; sub: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
-    <label className="toggle">
-      <span>{props.label}</span>
-      <input type="checkbox" checked={props.checked} onChange={(event) => props.onChange(event.target.checked)} />
+    <label className="opt-toggle-row-full">
+      <div>
+        <div className="opt-toggle-label">{props.label}</div>
+        <div className="opt-toggle-sub">{props.sub}</div>
+      </div>
+      <input type="checkbox" checked={props.checked} onChange={e => props.onChange(e.target.checked)} />
     </label>
   );
 }
 
 function ProviderLink(props: { href: string; label: string; note: string }) {
   return (
-    <a href={props.href} target="_blank" rel="noreferrer">
-      <span>{props.label}</span>
-      <small>{props.note}</small>
-      <ExternalLink size={14} />
+    <a className="opt-link-row" href={props.href} target="_blank" rel="noreferrer">
+      <span className="opt-link-label">{props.label}</span>
+      <span className="opt-link-note">{props.note}</span>
+      <ExternalLink size={12} />
     </a>
   );
 }
 
-function parseNumberList(value: string, fallback: number[], maxLength: number) {
-  const parsed = value.split(/[\s,]+/).map((part) => Number(part.trim())).filter((part) => Number.isFinite(part) && part > 0).slice(0, maxLength);
+function FlowItem(props: { title: string; body: string }) {
+  return (
+    <div className="opt-flow-item">
+      <span className="opt-flow-title">{props.title}</span>
+      <span className="opt-flow-body">{props.body}</span>
+    </div>
+  );
+}
+
+function shortKey(v?: string) {
+  return v ? `${v.slice(0, 4)}…${v.slice(-4)}` : '';
+}
+
+async function measureRpc(rpcUrl: string) {
+  const t = performance.now();
+  const health = await rpcCall<string>(rpcUrl, 'getHealth');
+  const slot   = await rpcCall<number>(rpcUrl, 'getSlot');
+  return { health, slot, ms: Math.round(performance.now() - t) };
+}
+
+async function rpcCall<T>(rpcUrl: string, method: string): Promise<T> {
+  const res = await fetch(rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: `trench-${method}`, method }),
+  });
+  const p = (await res.json().catch(() => null)) as { result?: T; error?: { message?: string } } | null;
+  if (!res.ok)         throw new Error(p?.error?.message ?? `HTTP ${res.status}`);
+  if (p?.error)        throw new Error(p.error.message ?? 'RPC error');
+  if (p?.result === undefined) throw new Error('No result');
+  return p.result;
+}
+
+function hotWalletRequest(msg: unknown): Promise<HotWalletResponse> {
+  return new Promise(res => chrome.runtime.sendMessage(msg, (r: unknown) => res(r as HotWalletResponse)));
+}
+
+function parseNumberList(value: string, fallback: number[], max: number) {
+  const parsed = value.split(/[\s,]+/).map(s => Number(s.trim())).filter(n => Number.isFinite(n) && n > 0).slice(0, max);
   return parsed.length ? parsed : fallback;
 }
 
