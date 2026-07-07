@@ -55,6 +55,7 @@ type PnlLedger = {
 
 function mount() {
   if (document.getElementById(ROOT_ID)) return;
+  console.info('[Trench] content script mounted', window.location.href);
   injectWalletBridge();
 
   const host = document.createElement('div');

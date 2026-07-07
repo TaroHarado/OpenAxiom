@@ -6,6 +6,7 @@
   "permissions": ["storage"],
   "host_permissions": [
     "https://axiom.trade/*",
+    "https://*.axiom.trade/*",
     "https://*.helius-rpc.com/*",
     "https://rpc.shyft.to/*",
     "https://*.quiknode.pro/*",
@@ -18,7 +19,7 @@
   ],
   "content_scripts": [
     {
-      "matches": ["https://axiom.trade/*"],
+      "matches": ["https://axiom.trade/*", "https://*.axiom.trade/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
@@ -31,7 +32,7 @@
   "web_accessible_resources": [
     {
       "resources": ["injected.js", "assets/*.js"],
-      "matches": ["https://axiom.trade/*"]
+      "matches": ["https://axiom.trade/*", "https://*.axiom.trade/*"]
     }
   ],
   "action": {
