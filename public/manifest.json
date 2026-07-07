@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "TradeWiz Axiom Overlay",
+  "version": "0.1.0",
+  "description": "Open-source floating trading terminal for Axiom. Wallet-signed execution only.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://axiom.trade/*",
+    "https://*.helius-rpc.com/*",
+    "https://*.quiknode.pro/*",
+    "https://api.mainnet-beta.solana.com/*",
+    "https://quote-api.jup.ag/*",
+    "https://lite-api.jup.ag/*",
+    "https://api.jup.ag/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://axiom.trade/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["injected.js", "assets/*.js"],
+      "matches": ["https://axiom.trade/*"]
+    }
+  ],
+  "action": {
+    "default_title": "TradeWiz"
+  }
+}
