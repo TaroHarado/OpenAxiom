@@ -45,6 +45,8 @@ Default preset:
 
 SOL balance and current token balance are fetched through the configured RPC. Realized PnL is tracked locally for trades executed through Trench by comparing pre-trade and post-trade SOL/WSOL/token balance deltas. The orders panel stores local Trench trade history with route, size, status, timestamp, error, and Solscan link when a signature is available.
 
+Overlay settings include local reset controls for clearing browser trade history and local PnL during testing.
+
 The header shows the detected mint and source, for example `F13T...VtiV / URL`. URL detection has priority over DOM detection so the Axiom meme page route is treated as canonical.
 
 ## Free RPC Keys

@@ -346,7 +346,22 @@ function TrenchOverlay() {
       </header>
 
       <main className="tw-body">
-        {settingsOpen ? <SettingsPanel settings={settingsState} onChange={patchSettings} /> : null}
+        {settingsOpen ? (
+          <SettingsPanel
+            settings={settingsState}
+            onChange={patchSettings}
+            onClearHistory={() => {
+              localStorage.removeItem(TRADE_HISTORY_KEY);
+              setOrders([]);
+              setToast({ kind: 'info', text: 'Trade history cleared' });
+            }}
+            onClearPnl={() => {
+              localStorage.removeItem(PNL_LEDGER_KEY);
+              setPnlLedger(null);
+              setToast({ kind: 'info', text: 'Local PnL cleared' });
+            }}
+          />
+        ) : null}
 
         <TradeSection
           side="buy"
@@ -467,8 +482,8 @@ function TradeSection(props: {
   );
 }
 
-function SettingsPanel(props: { settings: TradeSettings; onChange: (patch: Partial<TradeSettings>) => void }) {
-  const { settings, onChange } = props;
+function SettingsPanel(props: { settings: TradeSettings; onChange: (patch: Partial<TradeSettings>) => void; onClearHistory: () => void; onClearPnl: () => void }) {
+  const { settings, onChange, onClearHistory, onClearPnl } = props;
 
   return (
     <section className="tw-settings-panel">
@@ -559,6 +574,10 @@ function SettingsPanel(props: { settings: TradeSettings; onChange: (patch: Parti
           <span>Jito bundleOnly</span>
           <input type="checkbox" checked={settings.jitoBundleOnly} onChange={(event) => onChange({ jitoBundleOnly: event.target.checked })} />
         </label>
+        <div className="tw-settings-actions">
+          <button type="button" onClick={onClearHistory}>Clear history</button>
+          <button type="button" onClick={onClearPnl}>Clear PnL</button>
+        </div>
       </div>
     </section>
   );

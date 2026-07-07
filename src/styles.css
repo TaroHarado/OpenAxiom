@@ -464,6 +464,29 @@ select {
   accent-color: #14f195;
 }
 
+.tw-settings-actions {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.tw-settings-actions button {
+  height: 25px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.045);
+  color: #c9cad2;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 760;
+}
+
+.tw-settings-actions button:hover {
+  border-color: rgba(169, 148, 255, 0.38);
+  color: #ffffff;
+}
+
 .tw-toast {
   position: absolute;
   right: 9px;
