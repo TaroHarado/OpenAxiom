@@ -87,6 +87,38 @@
       .wide {
         width: 100%;
       }
+      .wallet-box {
+        display: grid;
+        gap: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.035);
+        padding: 9px;
+      }
+      .wallet-box label {
+        display: grid;
+        gap: 5px;
+        color: #8d909c;
+        font-size: 10px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0;
+      }
+      .wallet-box textarea,
+      .wallet-box input {
+        width: 100%;
+        border: 1px solid rgba(255, 255, 255, 0.11);
+        border-radius: 7px;
+        background: #05070a;
+        color: #ededf2;
+        padding: 8px;
+        font: 11px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace;
+        outline: none;
+      }
+      .wallet-box textarea {
+        min-height: 76px;
+        resize: vertical;
+      }
       .hint {
         padding-top: 2px;
         color: #747681;
@@ -108,6 +140,11 @@
       <div class="actions">
         <a class="primary" href="https://axiom.trade/meme/F13Tcyxe19oRt4W4i42Pg5iyttSaXyVqHX3HpyHyVtiV?chain=sol" target="_blank">Open Axiom</a>
         <button id="options" type="button">Options</button>
+      </div>
+      <div class="wallet-box">
+        <label>Hot wallet key<textarea id="secret" placeholder="base58 private key, hex, comma/space bytes, JSON array, or {secretKey:[...]}"></textarea></label>
+        <label>Password<input id="password" type="password" placeholder="local encryption password" /></label>
+        <button class="primary wide" id="import" type="button">Import hot wallet</button>
       </div>
       <button class="wide" id="force" type="button">Force panel on this tab</button>
       <div class="hint" id="result"></div>

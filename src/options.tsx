@@ -150,8 +150,9 @@ function OptionsApp() {
         </Panel>
 
         <Panel icon={<KeyRound size={18} />} title="Hot Wallet">
-          <Field label="Secret key JSON">
-            <textarea value={secretKey} onChange={(event) => setSecretKey(event.target.value)} placeholder={'[12,34,...64 bytes] or {"secretKey":[...]}'} spellCheck={false} />
+          <div className="wallet-callout">Instant trading requires Local hot wallet. Browser wallet mode will always ask Phantom/Solflare for approval.</div>
+          <Field label="Secret key">
+            <textarea value={secretKey} onChange={(event) => setSecretKey(event.target.value)} placeholder={'base58 private key, 0x hex, comma/space bytes, [12,34,...], or {"secretKey":[...]}'} spellCheck={false} />
           </Field>
           <Field label="Local password">
             <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} />

@@ -109,7 +109,9 @@ or:
 { "secretKey": [12, 34, 56] }
 ```
 
-The key must contain 64 bytes. Trench encrypts it locally with a password using PBKDF2 + AES-GCM. When unlocked, raw key bytes live in Chrome `storage.session` until the browser/extension session ends, the wallet is locked, or the wallet is forgotten.
+Trench also accepts base58 private-key strings, `0x` hex, raw hex, and comma/space-separated byte strings. A 32-byte seed is expanded into a Solana keypair; a 64-byte keypair is used directly. Importing or unlocking a hot wallet automatically switches the signer mode to `Local hot wallet`.
+
+Trench encrypts it locally with a password using PBKDF2 + AES-GCM. When unlocked, raw key bytes live in Chrome `storage.session` until the browser/extension session ends, the wallet is locked, or the wallet is forgotten.
 
 Use this mode for Axiom-style fast execution without Phantom/Solflare approval popups. Use a dedicated trading hot wallet, not a vault wallet.
 
@@ -146,6 +148,15 @@ Auto fee estimates a per-trade priority budget from `getRecentPrioritizationFees
 - `turbo`: higher percentile and floor for congestion.
 
 In RPC mode, the auto budget becomes priority fee. In Jito mode, part of the capped budget is converted into an explicit Jito tip transfer instruction and the rest remains priority fee.
+
+### Fast Delivery Layer
+
+Falcon Client and Yellowstone Jet are transaction delivery layers, not Pump/Jupiter instruction builders. They take an already built and signed Solana transaction and forward it faster through QUIC/TPU-style infrastructure.
+
+- Falcon Client: persistent QUIC connection, mTLS, datagram-first delivery with stream ack backup.
+- Yellowstone Jet: Solana QUIC sender/proxy with JSON-RPC `sendTransaction`, HTTP `/api/v1/transactions`, raw bytes/base58/base64 submission, simulation/sanitization, SwQoS, and metrics.
+
+Browsers cannot directly use those Rust QUIC clients as a Chrome content script delivery path. The correct Trench architecture is: browser builds/signs locally, then sends the signed transaction bytes to a trusted HTTPS relay that fans out to Jet/Falcon/Jito/TPU endpoints.
 
 ## Privacy Model
 
@@ -197,6 +208,7 @@ Axiom page
 - The orders panel is local browser history, not an exchange-side order book or indexer.
 - PumpSwap-specific post-migration routing is not implemented yet.
 - The Trench RPC router service is configuration-ready, but the hosted router itself must be deployed separately.
+- Falcon/Yellowstone Jet fast delivery requires a separate backend relay; it is not a browser-only feature.
 
 ## Development
 
@@ -224,6 +236,7 @@ Deploy the router behind HTTPS before using it as `Trench RPC router` in the ext
 
 - PumpSwap route detection and execution.
 - Hosted Trench RPC router with health scoring, rate limiting, and provider rotation.
+- HTTPS signed-transaction relay that forwards to Yellowstone Jet, Falcon, Jito, and standard RPC in parallel.
 - Jito tip-floor tuning from live block engine data.
 - Better transaction history and order tracking.
 - Optional Moralis/Shyft/Helius data adapters for metadata, balances, and history.

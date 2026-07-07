@@ -2,7 +2,7 @@ import { AddressLookupTableAccount, Keypair, PublicKey, SystemProgram, Transacti
 import { Buffer } from 'buffer';
 import type { HotWalletRequest, HotWalletResponse, PositionRequest, PositionResponse, SendSignedTransactionRequest, SignAndSendLocalRequest, TradeRequest, TradeResponse, TradeSettings } from './types';
 import { preparePumpTrade } from './pumpEngine';
-import { getActiveRpcUrl, usesTrenchRouting } from './storage';
+import { getActiveRpcUrl, SETTINGS_KEY, usesTrenchRouting } from './storage';
 import { createJitoTipInstruction } from './jito';
 
 declare const chrome: {
@@ -449,6 +449,7 @@ async function importHotWallet(rawSecretKey: string, password: string): Promise<
 
   await chrome.storage.local.set({ [HOT_WALLET_STORAGE_KEY]: { ...encrypted, publicKey } });
   await chrome.storage.session.set({ [HOT_WALLET_SESSION_KEY]: { secretKey: Array.from(secretKey), publicKey } });
+  await setLocalSigner(publicKey);
   return { ok: true, hasWallet: true, unlocked: true, publicKey };
 }
 
@@ -461,7 +462,14 @@ async function unlockHotWallet(password: string): Promise<HotWalletResponse> {
   const wallet = Keypair.fromSecretKey(secretKey);
   const publicKey = wallet.publicKey.toBase58();
   await chrome.storage.session.set({ [HOT_WALLET_SESSION_KEY]: { secretKey: Array.from(secretKey), publicKey } });
+  await setLocalSigner(publicKey);
   return { ok: true, hasWallet: true, unlocked: true, publicKey };
+}
+
+async function setLocalSigner(publicKey: string) {
+  const stored = await chrome.storage.local.get(SETTINGS_KEY);
+  const settings = typeof stored[SETTINGS_KEY] === 'object' && stored[SETTINGS_KEY] !== null ? stored[SETTINGS_KEY] : {};
+  await chrome.storage.local.set({ [SETTINGS_KEY]: { ...settings, signerMode: 'local', localWalletPublicKey: publicKey } });
 }
 
 async function forgetHotWallet(): Promise<HotWalletResponse> {
@@ -530,12 +538,76 @@ type JupiterSwapInstructionsResponse = {
 
 function parseSecretKey(value: string) {
   const trimmed = value.trim();
-  const parsed = JSON.parse(trimmed) as unknown;
-  const rawBytes = Array.isArray(parsed) ? parsed : isSecretKeyObject(parsed) ? parsed.secretKey : null;
-  if (!rawBytes) throw new Error('Secret key must be a JSON array or an object with secretKey');
-  if (rawBytes.length !== 64) throw new Error('Secret key must contain 64 bytes');
+  const rawBytes = parseSecretKeyBytes(trimmed);
+  if (!rawBytes) throw new Error('Secret key must be base58, hex, comma/space bytes, JSON array, or an object with secretKey');
+  if (![32, 64].includes(rawBytes.length)) throw new Error('Secret key must contain 32 seed bytes or 64 keypair bytes');
   const bytes = rawBytes.map((item) => Number(item));
   if (bytes.some((item) => !Number.isInteger(item) || item < 0 || item > 255)) throw new Error('Secret key bytes must be 0-255');
+  const keyBytes = Uint8Array.from(bytes);
+  return keyBytes.length === 32 ? Keypair.fromSeed(keyBytes).secretKey : keyBytes;
+}
+
+function parseSecretKeyBytes(trimmed: string): unknown[] | null {
+  const jsonBytes = parseJsonSecretKey(trimmed);
+  if (jsonBytes) return jsonBytes;
+
+  const bracketMatch = trimmed.match(/\[([\s\S]+)]/);
+  if (bracketMatch) return parseDelimitedBytes(bracketMatch[1]);
+
+  const delimited = parseDelimitedBytes(trimmed);
+  if (delimited) return delimited;
+
+  const hex = parseHexBytes(trimmed);
+  if (hex) return Array.from(hex);
+
+  const base58 = parseBase58Bytes(trimmed);
+  return base58 ? Array.from(base58) : null;
+}
+
+function parseJsonSecretKey(trimmed: string): unknown[] | null {
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (typeof parsed === 'string') return parseSecretKeyBytes(parsed);
+    return Array.isArray(parsed) ? parsed : isSecretKeyObject(parsed) ? parsed.secretKey : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseDelimitedBytes(value: string) {
+  if (!/^[\d\s,]+$/.test(value)) return null;
+  const parts = value.split(/[\s,]+/).filter(Boolean);
+  return parts.length ? parts.map((part) => Number(part)) : null;
+}
+
+function parseHexBytes(value: string) {
+  const normalized = value.startsWith('0x') ? value.slice(2) : value;
+  if (!/^[0-9a-fA-F]+$/.test(normalized) || normalized.length % 2 !== 0) return null;
+  return Uint8Array.from(normalized.match(/.{2}/g)?.map((byte) => Number.parseInt(byte, 16)) ?? []);
+}
+
+function parseBase58Bytes(value: string) {
+  const alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  if (!/^[1-9A-HJ-NP-Za-km-z]+$/.test(value)) return null;
+
+  let numeric = 0n;
+  for (const char of value) {
+    const digit = alphabet.indexOf(char);
+    if (digit < 0) return null;
+    numeric = numeric * 58n + BigInt(digit);
+  }
+
+  const bytes = [];
+  while (numeric > 0n) {
+    bytes.unshift(Number(numeric & 0xffn));
+    numeric >>= 8n;
+  }
+
+  for (const char of value) {
+    if (char !== '1') break;
+    bytes.unshift(0);
+  }
+
   return Uint8Array.from(bytes);
 }
 

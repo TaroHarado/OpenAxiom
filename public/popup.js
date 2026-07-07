@@ -2,6 +2,23 @@ document.getElementById('options')?.addEventListener('click', () => {
   chrome.runtime.openOptionsPage();
 });
 
+document.getElementById('import')?.addEventListener('click', () => {
+  const result = document.getElementById('result');
+  const secret = document.getElementById('secret');
+  const password = document.getElementById('password');
+
+  chrome.runtime.sendMessage({ type: 'TRENCH_HOT_WALLET_IMPORT', secretKey: secret?.value ?? '', password: password?.value ?? '' }, (response) => {
+    if (response?.ok) {
+      if (secret) secret.value = '';
+      if (password) password.value = '';
+      if (result) result.textContent = `Hot wallet imported: ${shortKey(response.publicKey)}`;
+      return;
+    }
+
+    if (result) result.textContent = response?.error ?? 'Hot wallet import failed.';
+  });
+});
+
 document.getElementById('force')?.addEventListener('click', async () => {
   const result = document.getElementById('result');
 
@@ -54,3 +71,7 @@ document.getElementById('force')?.addEventListener('click', async () => {
     if (result) result.textContent = error instanceof Error ? error.message : 'Injection failed.';
   }
 });
+
+function shortKey(value) {
+  return value ? `${value.slice(0, 4)}...${value.slice(-4)}` : '';
+}
