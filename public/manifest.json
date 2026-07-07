@@ -1,14 +1,16 @@
 {
   "manifest_version": 3,
-  "name": "TradeWiz Axiom Overlay",
+  "name": "Trench",
   "version": "0.1.0",
-  "description": "Open-source floating trading terminal for Axiom. Wallet-signed execution only.",
+  "description": "Open-source floating trench trading terminal for Axiom. Wallet-signed execution only.",
   "permissions": ["storage"],
   "host_permissions": [
     "https://axiom.trade/*",
     "https://*.helius-rpc.com/*",
+    "https://rpc.shyft.to/*",
     "https://*.quiknode.pro/*",
     "https://api.mainnet-beta.solana.com/*",
+    "https://*.block-engine.jito.wtf/*",
     "https://quote-api.jup.ag/*",
     "https://lite-api.jup.ag/*",
     "https://api.jup.ag/*"
@@ -32,6 +34,6 @@
     }
   ],
   "action": {
-    "default_title": "TradeWiz"
+    "default_title": "Trench"
   }
 }

@@ -42,7 +42,7 @@ declare global {
   }
 }
 
-const ROOT_ID = 'tradewiz-shadow-root';
+const ROOT_ID = 'trench-shadow-root';
 
 const sampleOrders: TradeOrder[] = [
   { id: 'o-1', side: 'sell', condition: 'Price -25% / $0.00339', size: '50%', status: 'Active' },
@@ -67,10 +67,10 @@ function mount() {
   const rootNode = document.createElement('div');
   shadow.appendChild(rootNode);
 
-  createRoot(rootNode).render(<TradeWizOverlay />);
+  createRoot(rootNode).render(<TrenchOverlay />);
 }
 
-function TradeWizOverlay() {
+function TrenchOverlay() {
   const [settingsState, setSettingsState] = useState<TradeSettings>(defaultSettings);
   const [settingsReady, setSettingsReady] = useState(false);
   const [position, setPosition] = useState(() => clampPosition(loadPosition()));
@@ -96,6 +96,7 @@ function TradeWizOverlay() {
     }),
     [token.symbol]
   );
+  const displayedWallet = settingsState.signerMode === 'local' ? settingsState.localWalletPublicKey : wallet;
 
   useEffect(() => {
     void loadExtensionSettings().then((loaded) => {
@@ -213,17 +214,16 @@ function TradeWizOverlay() {
     setToast({ kind: 'info', text: side === 'buy' ? 'Buying...' : 'Selling...' });
 
     try {
-      const publicKey = wallet ?? (await walletRequest('TRADEWIZ_WALLET_CONNECT')).publicKey;
+      const publicKey = settingsState.signerMode === 'local' ? settingsState.localWalletPublicKey : wallet ?? (await walletRequest('TRENCH_WALLET_CONNECT')).publicKey;
       if (!publicKey) throw new Error('Wallet not connected');
       setWallet(publicKey);
 
       const prepared = await prepareTradeMessage(side, amount, token.mint, publicKey, settingsState);
       if (!prepared.ok || !prepared.swapTransaction) throw new Error(prepared.error ?? 'Tx prepare failed');
 
-      const signed = await walletRequest('TRADEWIZ_WALLET_SIGN_TRANSACTION', prepared.swapTransaction);
-      if (!signed.signedTransaction) throw new Error('Wallet did not sign transaction');
-
-      const response = await sendSignedTransaction(signed.signedTransaction, settingsState.rpcUrl);
+      const response = settingsState.signerMode === 'local'
+        ? await signAndSendLocal(prepared.swapTransaction, settingsState)
+        : await signAndSendBrowserWallet(prepared.swapTransaction, settingsState);
       if (!response.ok) throw new Error(response.error ?? 'RPC send failed');
 
       setFlash('success');
@@ -250,7 +250,7 @@ function TradeWizOverlay() {
         onFocus={() => setActive(true)}
       >
         <Zap size={15} />
-        TradeWiz
+        Trench
       </button>
     );
   }
@@ -264,11 +264,11 @@ function TradeWizOverlay() {
     >
       <header className="tw-header" onPointerDown={startDrag}>
         <div className="tw-brand">
-          <div className="tw-logo">TW</div>
+          <div className="tw-logo">TR</div>
           <div className="tw-title-wrap">
-            <div className="tw-title">TradeWiz</div>
+            <div className="tw-title">Trench</div>
             <div className="tw-mint" title={token.mint ?? 'Mint not found'}>
-              {wallet ? shortMint(wallet) : token.mint ? shortMint(token.mint) : 'No mint'}
+              {displayedWallet ? shortMint(displayedWallet) : token.mint ? shortMint(token.mint) : 'No mint'}
             </div>
           </div>
           <button className="tw-preset tw-no-drag" type="button">
@@ -276,9 +276,9 @@ function TradeWizOverlay() {
           </button>
         </div>
 
-        <nav className="tw-header-actions tw-no-drag" aria-label="TradeWiz actions">
+        <nav className="tw-header-actions tw-no-drag" aria-label="Trench actions">
           <IconButton label="Orders"><History size={14} /></IconButton>
-          <IconButton label={wallet ? `Wallet ${shortMint(wallet)}` : 'Connect wallet'} onClick={() => walletRequest('TRADEWIZ_WALLET_CONNECT').then((value) => value.publicKey && setWallet(value.publicKey)).catch((error: unknown) => setToast({ kind: 'error', text: error instanceof Error ? error.message : 'Wallet error' }))}>
+          <IconButton label={walletButtonLabel(settingsState, wallet)} onClick={() => connectBrowserWallet(settingsState, setWallet, setToast)}>
             <Wallet size={14} />
           </IconButton>
           <IconButton label="Calculator"><Calculator size={14} /></IconButton>
@@ -400,6 +400,8 @@ function TradeSection(props: {
       </div>
 
       <div className="tw-param-row">
+        <ParamChip title="Signer"><Wallet size={12} /> {settings.signerMode === 'local' ? 'Hot' : 'Wallet'}</ParamChip>
+        <ParamChip title="Send mode"><Zap size={12} /> {settings.sendMode === 'jito' ? 'Jito' : 'RPC'}</ParamChip>
         <ParamChip title="Slippage"><Target size={12} /> {settings.slippage}%</ParamChip>
         <ParamChip title="Priority fee"><Zap size={12} /> {settings.priorityFee}</ParamChip>
         <ParamChip title="Jito tip"><GripHorizontal size={12} /> {settings.jitoTip}</ParamChip>
@@ -437,8 +439,30 @@ function SettingsPanel(props: { settings: TradeSettings; onChange: (patch: Parti
           <input type="number" step="0.001" value={settings.jitoTip} onChange={(event) => onChange({ jitoTip: Number(event.target.value) })} />
         </label>
         <label>
+          <span>Signer</span>
+          <select value={settings.signerMode} onChange={(event) => onChange({ signerMode: event.target.value as TradeSettings['signerMode'] })}>
+            <option value="wallet">Browser wallet</option>
+            <option value="local">Local hot wallet</option>
+          </select>
+        </label>
+        <label>
+          <span>Local pubkey</span>
+          <input value={settings.localWalletPublicKey} readOnly />
+        </label>
+        <label>
           <span>RPC URL</span>
           <input value={settings.rpcUrl} onChange={(event) => onChange({ rpcUrl: event.target.value })} />
+        </label>
+        <label>
+          <span>Send mode</span>
+          <select value={settings.sendMode} onChange={(event) => onChange({ sendMode: event.target.value as TradeSettings['sendMode'] })}>
+            <option value="rpc">RPC preflight</option>
+            <option value="jito">Jito low latency</option>
+          </select>
+        </label>
+        <label>
+          <span>Jito endpoint</span>
+          <input value={settings.jitoEndpoint} onChange={(event) => onChange({ jitoEndpoint: event.target.value })} />
         </label>
         <label>
           <span>Engine</span>
@@ -459,6 +483,10 @@ function SettingsPanel(props: { settings: TradeSettings; onChange: (patch: Parti
         <label className="tw-toggle-row">
           <span>Hotkeys</span>
           <input type="checkbox" checked={settings.hotkeys} onChange={(event) => onChange({ hotkeys: event.target.checked })} />
+        </label>
+        <label className="tw-toggle-row">
+          <span>Jito bundleOnly</span>
+          <input type="checkbox" checked={settings.jitoBundleOnly} onChange={(event) => onChange({ jitoBundleOnly: event.target.checked })} />
         </label>
       </div>
     </section>
@@ -504,6 +532,26 @@ function SolanaMark() {
   return <span className="tw-solana" aria-hidden="true" />;
 }
 
+function walletButtonLabel(settings: TradeSettings, wallet: string | null) {
+  if (settings.signerMode === 'local') return settings.localWalletPublicKey ? `Hot wallet ${shortMint(settings.localWalletPublicKey)}` : 'Hot wallet not set';
+  return wallet ? `Wallet ${shortMint(wallet)}` : 'Connect wallet';
+}
+
+function connectBrowserWallet(
+  settings: TradeSettings,
+  setWallet: (wallet: string) => void,
+  setToast: (toast: { kind: ToastKind; text: string; signature?: string } | null) => void
+) {
+  if (settings.signerMode === 'local') {
+    setToast({ kind: settings.localWalletPublicKey ? 'info' : 'error', text: settings.localWalletPublicKey ? 'Using local hot wallet' : 'Import hot wallet in options' });
+    return;
+  }
+
+  walletRequest('TRENCH_WALLET_CONNECT')
+    .then((value) => value.publicKey && setWallet(value.publicKey))
+    .catch((error: unknown) => setToast({ kind: 'error', text: error instanceof Error ? error.message : 'Wallet error' }));
+}
+
 function prepareTradeMessage(side: TradeSide, amount: number, mint: string | null, wallet: string, settings: TradeSettings): Promise<TradeResponse> {
   return new Promise((resolve) => {
     const sendMessage = window.chrome?.runtime?.sendMessage;
@@ -512,11 +560,17 @@ function prepareTradeMessage(side: TradeSide, amount: number, mint: string | nul
       return;
     }
 
-    sendMessage({ type: 'TRADEWIZ_PREPARE_TRADE', side, amount, mint, wallet, settings }, resolve);
+    sendMessage({ type: 'TRENCH_PREPARE_TRADE', side, amount, mint, wallet, settings }, resolve);
   });
 }
 
-function sendSignedTransaction(signedTransaction: string, rpcUrl: string): Promise<TradeResponse> {
+async function signAndSendBrowserWallet(transaction: string, settings: TradeSettings): Promise<TradeResponse> {
+  const signed = await walletRequest('TRENCH_WALLET_SIGN_TRANSACTION', transaction);
+  if (!signed.signedTransaction) throw new Error('Wallet did not sign transaction');
+  return sendSignedTransaction(signed.signedTransaction, settings);
+}
+
+function sendSignedTransaction(signedTransaction: string, settings: TradeSettings): Promise<TradeResponse> {
   return new Promise((resolve) => {
     const sendMessage = window.chrome?.runtime?.sendMessage;
     if (!sendMessage) {
@@ -524,7 +578,19 @@ function sendSignedTransaction(signedTransaction: string, rpcUrl: string): Promi
       return;
     }
 
-    sendMessage({ type: 'TRADEWIZ_SEND_SIGNED_TRANSACTION', signedTransaction, rpcUrl }, resolve);
+    sendMessage({ type: 'TRENCH_SEND_SIGNED_TRANSACTION', signedTransaction, settings }, resolve);
+  });
+}
+
+function signAndSendLocal(transaction: string, settings: TradeSettings): Promise<TradeResponse> {
+  return new Promise((resolve) => {
+    const sendMessage = window.chrome?.runtime?.sendMessage;
+    if (!sendMessage) {
+      window.setTimeout(() => resolve({ ok: false, error: 'Extension runtime unavailable' }), 200);
+      return;
+    }
+
+    sendMessage({ type: 'TRENCH_SIGN_AND_SEND_LOCAL', transaction, settings }, resolve);
   });
 }
 
@@ -540,7 +606,7 @@ function walletRequest(type: WalletBridgeRequest['type'], transaction?: string):
     function onMessage(event: MessageEvent<WalletBridgeResponse>) {
       if (event.source !== window) return;
       const response = event.data;
-      if (response?.type !== 'TRADEWIZ_WALLET_RESPONSE' || response.id !== id) return;
+      if (response?.type !== 'TRENCH_WALLET_RESPONSE' || response.id !== id) return;
 
       window.clearTimeout(timeout);
       window.removeEventListener('message', onMessage);
@@ -561,7 +627,7 @@ function injectWalletBridge() {
   const script = document.createElement('script');
   script.src = src;
   script.type = 'module';
-  script.dataset.tradewiz = 'wallet-bridge';
+  script.dataset.trench = 'wallet-bridge';
   (document.head || document.documentElement).appendChild(script);
 }
 

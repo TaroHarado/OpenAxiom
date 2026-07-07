@@ -18,17 +18,17 @@ declare global {
 window.addEventListener('message', async (event: MessageEvent<WalletBridgeRequest>) => {
   if (event.source !== window) return;
   const request = event.data;
-  if (!request || !request.type?.startsWith('TRADEWIZ_WALLET_')) return;
+  if (!request || !request.type?.startsWith('TRENCH_WALLET_')) return;
 
   try {
-    if (request.type === 'TRADEWIZ_WALLET_CONNECT') {
+    if (request.type === 'TRENCH_WALLET_CONNECT') {
       const provider = getProvider();
       const response = await provider.connect();
       postResponse({ id: request.id, ok: true, publicKey: response.publicKey.toString() });
       return;
     }
 
-    if (request.type === 'TRADEWIZ_WALLET_SIGN_TRANSACTION') {
+    if (request.type === 'TRENCH_WALLET_SIGN_TRANSACTION') {
       if (!request.transaction) throw new Error('Missing transaction');
       const provider = getProvider();
       const transaction = VersionedTransaction.deserialize(base64ToBytes(request.transaction));
@@ -51,7 +51,7 @@ function serializeTransaction(transaction: VersionedTransaction): Uint8Array {
 }
 
 function postResponse(response: Omit<WalletBridgeResponse, 'type'>) {
-  window.postMessage({ ...response, type: 'TRADEWIZ_WALLET_RESPONSE' }, window.location.origin);
+  window.postMessage({ ...response, type: 'TRENCH_WALLET_RESPONSE' }, window.location.origin);
 }
 
 function base64ToBytes(value: string) {

@@ -1,9 +1,15 @@
 import type { TradeSettings, WidgetPosition } from './types';
 
-export const SETTINGS_KEY = 'tradewiz.settings.v1';
-const POSITION_KEY = 'tradewiz.position.v1';
-const COLLAPSED_KEY = 'tradewiz.collapsed.v1';
+export const SETTINGS_KEY = 'trench.settings.v1';
+const LEGACY_SETTINGS_KEY = 'tradewiz.settings.v1';
+const POSITION_KEY = 'trench.position.v1';
+const LEGACY_POSITION_KEY = 'tradewiz.position.v1';
+const COLLAPSED_KEY = 'trench.collapsed.v1';
+const LEGACY_COLLAPSED_KEY = 'tradewiz.collapsed.v1';
 export const PUBLIC_TEST_RPC_URL = 'https://api.mainnet-beta.solana.com';
+export const HELIUS_RPC_TEMPLATE = 'https://mainnet.helius-rpc.com/?api-key=';
+export const SHYFT_RPC_TEMPLATE = 'https://rpc.shyft.to?api_key=';
+export const JITO_MAINNET_TRANSACTION_URL = 'https://mainnet.block-engine.jito.wtf/api/v1/transactions';
 
 export const defaultSettings: TradeSettings = {
   buyAmounts: [0.0005, 0.5, 2, 5],
@@ -17,13 +23,18 @@ export const defaultSettings: TradeSettings = {
   confirmation: false,
   hotkeys: true,
   rpcUrl: PUBLIC_TEST_RPC_URL,
+  signerMode: 'wallet',
+  localWalletPublicKey: '',
+  sendMode: 'rpc',
+  jitoEndpoint: JITO_MAINNET_TRANSACTION_URL,
+  jitoBundleOnly: false,
   executionMode: 'jupiter'
 };
 
 const fallbackPosition: WidgetPosition = { x: 24, y: 72 };
 
 export function loadSettings(): TradeSettings {
-  const raw = localStorage.getItem(SETTINGS_KEY);
+  const raw = localStorage.getItem(SETTINGS_KEY) ?? localStorage.getItem(LEGACY_SETTINGS_KEY);
   if (!raw) return defaultSettings;
 
   try {
@@ -38,8 +49,8 @@ export async function loadExtensionSettings(): Promise<TradeSettings> {
   const chromeStorage = getChromeStorage();
   if (!chromeStorage) return loadSettings();
 
-  const stored = await chromeStorage.get(SETTINGS_KEY);
-  const parsed = stored[SETTINGS_KEY] as Partial<TradeSettings> | undefined;
+  const stored = await chromeStorage.get([SETTINGS_KEY, LEGACY_SETTINGS_KEY]);
+  const parsed = (stored[SETTINGS_KEY] ?? stored[LEGACY_SETTINGS_KEY]) as Partial<TradeSettings> | undefined;
   return normalizeSettings(parsed);
 }
 
@@ -61,7 +72,7 @@ export async function resetExtensionSettings() {
 }
 
 export function loadPosition(): WidgetPosition {
-  const raw = localStorage.getItem(POSITION_KEY);
+  const raw = localStorage.getItem(POSITION_KEY) ?? localStorage.getItem(LEGACY_POSITION_KEY);
   if (!raw) return fallbackPosition;
 
   try {
@@ -80,7 +91,7 @@ export function savePosition(position: WidgetPosition) {
 }
 
 export function loadCollapsed(): boolean {
-  return localStorage.getItem(COLLAPSED_KEY) === 'true';
+  return (localStorage.getItem(COLLAPSED_KEY) ?? localStorage.getItem(LEGACY_COLLAPSED_KEY)) === 'true';
 }
 
 export function saveCollapsed(collapsed: boolean) {
@@ -99,6 +110,11 @@ function normalizeSettings(settings?: Partial<TradeSettings>): TradeSettings {
     priorityFee: clampNumber(merged.priorityFee, 0, 0.1, defaultSettings.priorityFee),
     jitoTip: clampNumber(merged.jitoTip, 0, 0.1, defaultSettings.jitoTip),
     rpcUrl: typeof merged.rpcUrl === 'string' && merged.rpcUrl.trim() ? merged.rpcUrl.trim() : PUBLIC_TEST_RPC_URL,
+    signerMode: ['wallet', 'local'].includes(merged.signerMode) ? merged.signerMode : defaultSettings.signerMode,
+    localWalletPublicKey: typeof merged.localWalletPublicKey === 'string' ? merged.localWalletPublicKey : '',
+    sendMode: ['rpc', 'jito'].includes(merged.sendMode) ? merged.sendMode : defaultSettings.sendMode,
+    jitoEndpoint: typeof merged.jitoEndpoint === 'string' && merged.jitoEndpoint.trim() ? merged.jitoEndpoint.trim() : JITO_MAINNET_TRANSACTION_URL,
+    jitoBundleOnly: Boolean(merged.jitoBundleOnly),
     executionMode: ['jupiter', 'pump', 'auto'].includes(merged.executionMode) ? merged.executionMode : defaultSettings.executionMode
   };
 }

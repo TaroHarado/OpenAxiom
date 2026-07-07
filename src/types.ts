@@ -19,6 +19,11 @@ export type TradeSettings = {
   confirmation: boolean;
   hotkeys: boolean;
   rpcUrl: string;
+  signerMode: 'wallet' | 'local';
+  localWalletPublicKey: string;
+  sendMode: 'rpc' | 'jito';
+  jitoEndpoint: string;
+  jitoBundleOnly: boolean;
   executionMode: 'jupiter' | 'pump' | 'auto';
 };
 
@@ -46,7 +51,7 @@ export type TradeOrder = {
 };
 
 export type TradeRequest = {
-  type: 'TRADEWIZ_PREPARE_TRADE';
+  type: 'TRENCH_PREPARE_TRADE';
   side: TradeSide;
   amount: number;
   mint: string | null;
@@ -65,20 +70,41 @@ export type TradeResponse = {
 };
 
 export type SendSignedTransactionRequest = {
-  type: 'TRADEWIZ_SEND_SIGNED_TRANSACTION';
+  type: 'TRENCH_SEND_SIGNED_TRANSACTION';
   signedTransaction: string;
-  rpcUrl: string;
+  settings: TradeSettings;
+};
+
+export type SignAndSendLocalRequest = {
+  type: 'TRENCH_SIGN_AND_SEND_LOCAL';
+  transaction: string;
+  settings: TradeSettings;
+};
+
+export type HotWalletRequest =
+  | { type: 'TRENCH_HOT_WALLET_STATUS' }
+  | { type: 'TRENCH_HOT_WALLET_IMPORT'; secretKey: string; password: string }
+  | { type: 'TRENCH_HOT_WALLET_UNLOCK'; password: string }
+  | { type: 'TRENCH_HOT_WALLET_LOCK' }
+  | { type: 'TRENCH_HOT_WALLET_FORGET' };
+
+export type HotWalletResponse = {
+  ok: boolean;
+  hasWallet?: boolean;
+  unlocked?: boolean;
+  publicKey?: string;
+  error?: string;
 };
 
 export type WalletBridgeRequest = {
   id: string;
-  type: 'TRADEWIZ_WALLET_CONNECT' | 'TRADEWIZ_WALLET_SIGN_TRANSACTION';
+  type: 'TRENCH_WALLET_CONNECT' | 'TRENCH_WALLET_SIGN_TRANSACTION';
   transaction?: string;
 };
 
 export type WalletBridgeResponse = {
   id: string;
-  type: 'TRADEWIZ_WALLET_RESPONSE';
+  type: 'TRENCH_WALLET_RESPONSE';
   ok: boolean;
   publicKey?: string;
   signedTransaction?: string;

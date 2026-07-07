@@ -1,14 +1,25 @@
-import type { SendSignedTransactionRequest, TradeRequest, TradeResponse } from './types';
+import { Keypair, VersionedTransaction } from '@solana/web3.js';
+import type { HotWalletRequest, HotWalletResponse, SendSignedTransactionRequest, SignAndSendLocalRequest, TradeRequest, TradeResponse } from './types';
 import { preparePumpTrade } from './pumpEngine';
 
 declare const chrome: {
   runtime: {
     onMessage: {
       addListener: (
-        callback: (message: unknown, sender: unknown, sendResponse: (response: TradeResponse) => void) => boolean | void
+        callback: (message: unknown, sender: unknown, sendResponse: (response: TradeResponse | HotWalletResponse) => void) => boolean | void
       ) => void;
     };
   };
+  storage: {
+    local: ChromeStorageArea;
+    session: ChromeStorageArea;
+  };
+};
+
+type ChromeStorageArea = {
+  get: (key: string | string[]) => Promise<Record<string, unknown>>;
+  set: (items: Record<string, unknown>) => Promise<void>;
+  remove: (key: string | string[]) => Promise<void>;
 };
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
@@ -19,19 +30,35 @@ const PUBLIC_KEY_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const MAX_BUY_SOL = 100;
 const MAX_PRIORITY_FEE_SOL = 0.1;
 const MAX_SLIPPAGE_PERCENT = 50;
+const HOT_WALLET_STORAGE_KEY = 'trench.hotWallet.v1';
+const HOT_WALLET_SESSION_KEY = 'trench.hotWallet.session.v1';
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  const request = message as Partial<TradeRequest | SendSignedTransactionRequest>;
+  const request = message as Partial<TradeRequest | SendSignedTransactionRequest | SignAndSendLocalRequest | HotWalletRequest>;
 
-  if (request.type === 'TRADEWIZ_PREPARE_TRADE') {
+  if (request.type === 'TRENCH_PREPARE_TRADE') {
     prepareTrade(request as TradeRequest)
       .then(sendResponse)
       .catch((error: unknown) => sendResponse({ ok: false, error: normalizeError(error) }));
     return true;
   }
 
-  if (request.type === 'TRADEWIZ_SEND_SIGNED_TRANSACTION') {
+  if (request.type === 'TRENCH_SEND_SIGNED_TRANSACTION') {
     sendSignedTransaction(request as SendSignedTransactionRequest)
+      .then(sendResponse)
+      .catch((error: unknown) => sendResponse({ ok: false, error: normalizeError(error) }));
+    return true;
+  }
+
+  if (request.type === 'TRENCH_SIGN_AND_SEND_LOCAL') {
+    signAndSendLocal(request as SignAndSendLocalRequest)
+      .then(sendResponse)
+      .catch((error: unknown) => sendResponse({ ok: false, error: normalizeError(error) }));
+    return true;
+  }
+
+  if (isHotWalletRequest(request)) {
+    handleHotWalletRequest(request as HotWalletRequest)
       .then(sendResponse)
       .catch((error: unknown) => sendResponse({ ok: false, error: normalizeError(error) }));
     return true;
@@ -89,6 +116,16 @@ async function prepareTrade(request: TradeRequest): Promise<TradeResponse> {
   };
 }
 
+async function signAndSendLocal(request: SignAndSendLocalRequest): Promise<TradeResponse> {
+  const wallet = await getUnlockedHotWallet();
+  if (request.settings.localWalletPublicKey && wallet.publicKey.toBase58() !== request.settings.localWalletPublicKey) {
+    throw new Error('Unlocked hot wallet does not match selected local pubkey');
+  }
+  const transaction = VersionedTransaction.deserialize(base64ToBytes(request.transaction));
+  transaction.sign([wallet]);
+  return sendSignedTransaction({ type: 'TRENCH_SEND_SIGNED_TRANSACTION', signedTransaction: bytesToBase64(transaction.serialize()), settings: request.settings });
+}
+
 function isPumpFallbackError(error: unknown) {
   const message = normalizeError(error).toLowerCase();
   return (
@@ -101,14 +138,16 @@ function isPumpFallbackError(error: unknown) {
 
 async function sendSignedTransaction(request: SendSignedTransactionRequest): Promise<TradeResponse> {
   if (!request.signedTransaction) throw new Error('Missing signed transaction');
-  validateRpcUrl(request.rpcUrl);
+  if (request.settings.sendMode === 'jito') return sendJitoTransaction(request);
 
-  const result = await fetchJson<{ result?: string; error?: { message?: string } }>(request.rpcUrl, {
+  validateRpcUrl(request.settings.rpcUrl);
+
+  const result = await fetchJson<{ result?: string; error?: { message?: string } }>(request.settings.rpcUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       jsonrpc: '2.0',
-      id: 'tradewiz-send',
+      id: 'trench-send',
       method: 'sendTransaction',
       params: [
         request.signedTransaction,
@@ -124,6 +163,34 @@ async function sendSignedTransaction(request: SendSignedTransactionRequest): Pro
 
   if (result.error) throw new Error(result.error.message ?? 'RPC send failed');
   if (!result.result) throw new Error('RPC returned no signature');
+
+  return { ok: true, signature: result.result };
+}
+
+async function sendJitoTransaction(request: SendSignedTransactionRequest): Promise<TradeResponse> {
+  validateJitoUrl(request.settings.jitoEndpoint);
+
+  const url = new URL(request.settings.jitoEndpoint);
+  if (request.settings.jitoBundleOnly) url.searchParams.set('bundleOnly', 'true');
+
+  const result = await fetchJson<{ result?: string; error?: { message?: string } }>(url.toString(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 'trench-jito-send',
+      method: 'sendTransaction',
+      params: [
+        request.signedTransaction,
+        {
+          encoding: 'base64'
+        }
+      ]
+    })
+  });
+
+  if (result.error) throw new Error(result.error.message ?? 'Jito send failed');
+  if (!result.result) throw new Error('Jito returned no signature');
 
   return { ok: true, signature: result.result };
 }
@@ -146,6 +213,7 @@ function validateTradeRequest(request: TradeRequest) {
     throw new Error(`Jito tip must be between 0 and ${MAX_PRIORITY_FEE_SOL} SOL`);
   }
   validateRpcUrl(settings.rpcUrl);
+  validateJitoUrl(settings.jitoEndpoint);
 }
 
 function validateRpcUrl(rawUrl: string) {
@@ -161,11 +229,157 @@ function validateRpcUrl(rawUrl: string) {
 }
 
 function isAllowedRpcHost(hostname: string) {
-  return hostname === 'api.mainnet-beta.solana.com' || hostname.endsWith('.helius-rpc.com') || hostname.endsWith('.quiknode.pro');
+  return hostname === 'api.mainnet-beta.solana.com' || hostname === 'mainnet.helius-rpc.com' || hostname === 'rpc.shyft.to' || hostname.endsWith('.helius-rpc.com') || hostname.endsWith('.quiknode.pro');
+}
+
+function validateJitoUrl(rawUrl: string) {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error('Invalid Jito endpoint');
+  }
+
+  if (url.protocol !== 'https:') throw new Error('Jito endpoint must use HTTPS');
+  if (!url.hostname.endsWith('.block-engine.jito.wtf')) throw new Error('Jito endpoint is not allowed');
+  if (url.pathname !== '/api/v1/transactions') throw new Error('Jito endpoint must use /api/v1/transactions');
 }
 
 function isPublicKeyString(value: string | null | undefined) {
   return typeof value === 'string' && PUBLIC_KEY_PATTERN.test(value);
+}
+
+function isHotWalletRequest(request: Partial<TradeRequest | SendSignedTransactionRequest | SignAndSendLocalRequest | HotWalletRequest>) {
+  return typeof request.type === 'string' && request.type.startsWith('TRENCH_HOT_WALLET_');
+}
+
+async function handleHotWalletRequest(request: HotWalletRequest): Promise<HotWalletResponse> {
+  if (request.type === 'TRENCH_HOT_WALLET_STATUS') return getHotWalletStatus();
+  if (request.type === 'TRENCH_HOT_WALLET_IMPORT') return importHotWallet(request.secretKey, request.password);
+  if (request.type === 'TRENCH_HOT_WALLET_UNLOCK') return unlockHotWallet(request.password);
+  if (request.type === 'TRENCH_HOT_WALLET_LOCK') return lockHotWallet();
+  if (request.type === 'TRENCH_HOT_WALLET_FORGET') return forgetHotWallet();
+  return { ok: false, error: 'Unknown hot wallet request' };
+}
+
+async function getHotWalletStatus(): Promise<HotWalletResponse> {
+  const stored = await chrome.storage.local.get(HOT_WALLET_STORAGE_KEY);
+  const session = await chrome.storage.session.get(HOT_WALLET_SESSION_KEY);
+  const encrypted = stored[HOT_WALLET_STORAGE_KEY] as EncryptedHotWallet | undefined;
+  const unlocked = session[HOT_WALLET_SESSION_KEY] as HotWalletSession | undefined;
+  return {
+    ok: true,
+    hasWallet: Boolean(encrypted),
+    unlocked: Boolean(unlocked?.secretKey),
+    publicKey: unlocked?.publicKey ?? encrypted?.publicKey
+  };
+}
+
+async function importHotWallet(rawSecretKey: string, password: string): Promise<HotWalletResponse> {
+  const secretKey = parseSecretKey(rawSecretKey);
+  const wallet = Keypair.fromSecretKey(secretKey);
+  const encrypted = await encryptSecretKey(secretKey, password);
+  const publicKey = wallet.publicKey.toBase58();
+
+  await chrome.storage.local.set({ [HOT_WALLET_STORAGE_KEY]: { ...encrypted, publicKey } });
+  await chrome.storage.session.set({ [HOT_WALLET_SESSION_KEY]: { secretKey: Array.from(secretKey), publicKey } });
+  return { ok: true, hasWallet: true, unlocked: true, publicKey };
+}
+
+async function unlockHotWallet(password: string): Promise<HotWalletResponse> {
+  const stored = await chrome.storage.local.get(HOT_WALLET_STORAGE_KEY);
+  const encrypted = stored[HOT_WALLET_STORAGE_KEY] as EncryptedHotWallet | undefined;
+  if (!encrypted) throw new Error('No local hot wallet imported');
+
+  const secretKey = await decryptSecretKey(encrypted, password);
+  const wallet = Keypair.fromSecretKey(secretKey);
+  const publicKey = wallet.publicKey.toBase58();
+  await chrome.storage.session.set({ [HOT_WALLET_SESSION_KEY]: { secretKey: Array.from(secretKey), publicKey } });
+  return { ok: true, hasWallet: true, unlocked: true, publicKey };
+}
+
+async function forgetHotWallet(): Promise<HotWalletResponse> {
+  await chrome.storage.local.remove(HOT_WALLET_STORAGE_KEY);
+  await chrome.storage.session.remove(HOT_WALLET_SESSION_KEY);
+  return { ok: true, hasWallet: false, unlocked: false };
+}
+
+async function lockHotWallet(): Promise<HotWalletResponse> {
+  const stored = await chrome.storage.local.get(HOT_WALLET_STORAGE_KEY);
+  const encrypted = stored[HOT_WALLET_STORAGE_KEY] as EncryptedHotWallet | undefined;
+  await chrome.storage.session.remove(HOT_WALLET_SESSION_KEY);
+  return { ok: true, hasWallet: Boolean(encrypted), unlocked: false, publicKey: encrypted?.publicKey };
+}
+
+async function getUnlockedHotWallet() {
+  const session = await chrome.storage.session.get(HOT_WALLET_SESSION_KEY);
+  const wallet = session[HOT_WALLET_SESSION_KEY] as HotWalletSession | undefined;
+  if (!wallet?.secretKey) throw new Error('Local hot wallet is locked');
+  return Keypair.fromSecretKey(Uint8Array.from(wallet.secretKey));
+}
+
+type EncryptedHotWallet = {
+  publicKey: string;
+  cipherText: number[];
+  iv: number[];
+  salt: number[];
+};
+
+type HotWalletSession = {
+  publicKey: string;
+  secretKey: number[];
+};
+
+function parseSecretKey(value: string) {
+  const trimmed = value.trim();
+  const parsed = JSON.parse(trimmed) as unknown;
+  const rawBytes = Array.isArray(parsed) ? parsed : isSecretKeyObject(parsed) ? parsed.secretKey : null;
+  if (!rawBytes) throw new Error('Secret key must be a JSON array or an object with secretKey');
+  if (rawBytes.length !== 64) throw new Error('Secret key must contain 64 bytes');
+  const bytes = rawBytes.map((item) => Number(item));
+  if (bytes.some((item) => !Number.isInteger(item) || item < 0 || item > 255)) throw new Error('Secret key bytes must be 0-255');
+  return Uint8Array.from(bytes);
+}
+
+function isSecretKeyObject(value: unknown): value is { secretKey: unknown[] } {
+  return typeof value === 'object' && value !== null && Array.isArray((value as { secretKey?: unknown }).secretKey);
+}
+
+async function encryptSecretKey(secretKey: Uint8Array, password: string) {
+  if (password.length < 8) throw new Error('Password must be at least 8 characters');
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveEncryptionKey(password, salt);
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: toArrayBuffer(iv) }, key, toArrayBuffer(secretKey));
+  return { cipherText: Array.from(new Uint8Array(encrypted)), iv: Array.from(iv), salt: Array.from(salt) };
+}
+
+async function decryptSecretKey(wallet: EncryptedHotWallet, password: string) {
+  const key = await deriveEncryptionKey(password, Uint8Array.from(wallet.salt));
+  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: toArrayBuffer(Uint8Array.from(wallet.iv)) }, key, toArrayBuffer(Uint8Array.from(wallet.cipherText)));
+  return new Uint8Array(decrypted);
+}
+
+async function deriveEncryptionKey(password: string, salt: Uint8Array) {
+  const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: toArrayBuffer(salt), iterations: 250_000, hash: 'SHA-256' }, material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+
+function toArrayBuffer(bytes: Uint8Array) {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
+function base64ToBytes(value: string) {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
 async function fetchJupiterQuote(params: { inputMint: string; outputMint: string; amount: number; slippageBps: number }) {
@@ -182,13 +396,19 @@ async function fetchJupiterQuote(params: { inputMint: string; outputMint: string
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
-  const payload = (await response.json().catch(() => null)) as T & { error?: string; message?: string };
+  const payload = (await response.json().catch(() => null)) as T & { error?: string | { message?: string }; message?: string };
 
   if (!response.ok) {
-    throw new Error(payload?.error ?? payload?.message ?? `HTTP ${response.status}`);
+    throw new Error(readPayloadError(payload) ?? `HTTP ${response.status}`);
   }
 
   return payload as T;
+}
+
+function readPayloadError(payload: { error?: string | { message?: string }; message?: string } | null) {
+  if (!payload) return null;
+  if (typeof payload.error === 'string') return payload.error;
+  return payload.error?.message ?? payload.message ?? null;
 }
 
 function normalizeError(error: unknown) {

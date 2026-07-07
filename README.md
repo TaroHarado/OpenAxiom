@@ -1,82 +1,167 @@
-# TradeWiz Axiom Overlay
+# Trench
 
-Open-source Chrome Manifest V3 extension MVP for a floating TradeWiz trading terminal on top of Axiom.
+Trench is an open-source Chrome extension that adds a compact trading terminal on top of Axiom. It is built for fast Solana memecoin execution: small floating UI, local settings, local signing, direct RPC/Jito submission, and no hosted Trench backend.
 
-The extension injects a Shadow DOM widget into `https://axiom.trade/*`, keeps Axiom layout untouched, saves widget position/settings locally, and routes trade button clicks through a background service worker message layer.
+## What It Does
 
-Current execution status:
+- Injects a draggable 320px trading widget into `https://axiom.trade/*`.
+- Detects the current token/mint from the Axiom page when possible.
+- Supports Pump bonding-curve buy/sell through a lightweight manual Pump V2 instruction builder.
+- Supports Jupiter buy routing for migrated/routable tokens.
+- Supports Auto mode: try Pump first, fall back to Jupiter when the curve is complete or missing.
+- Supports normal RPC send with preflight simulation.
+- Supports optional Jito low-latency send through the Block Engine transaction endpoint.
+- Supports browser-wallet signing or local hot-wallet signing without approval popups.
+- Stores settings locally in Chrome. Trench does not run a server.
 
-- Jupiter buy path is wired: SOL -> current mint, wallet signing, RPC send.
-- Direct Pump bonding-curve buy/sell is wired through a lightweight manual V2 instruction builder with Pump fee-tier decoding. No Pump SDK runtime dependency.
-- Pump sell uses the user's ATA balance and sells the selected percentage.
-- Auto mode tries Pump bonding curve first, then falls back to Jupiter when the curve is complete or missing.
-
-## Features
-
-- Floating 320px dark trading widget with high z-index.
-- Draggable header with persisted position in `localStorage`.
-- Collapse to compact button.
-- Shadow DOM style isolation.
-- Buy quick buttons: `0.0005`, `0.5`, `2`, `5`.
-- Sell quick buttons: `10%`, `30%`, `70%`, `100%`.
-- Slippage, priority fee, Jito tip and protection chips.
-- Compact settings panel for presets and hotkeys.
-- Chrome extension settings page at `chrome://extensions` -> TradeWiz -> Details -> Extension options.
-- Active orders list with cancel state.
-- Inline loading, success and error states. No browser alerts.
-- Axiom token/mint extraction from URL/DOM best-effort heuristics.
-- Hotkeys only when overlay is active and not while typing.
-- Phantom/Solflare signing bridge through an injected page-context script.
-- Jupiter quote/swap transaction preparation in the background service worker.
-- Signed transaction submission through the configured RPC URL.
-- Pump `buy_exact_quote_in_v2` / `sell_v2` transaction preparation in the background service worker.
-
-## What It Looks Like
-
-After installation, open `https://axiom.trade/*`. A compact dark TradeWiz terminal floats over the page, roughly 320px wide. It has a draggable header, wallet button, preset controls, buy/sell quick buttons, slippage/fee chips, settings drawer, order list, and inline transaction status.
-
-Chrome also exposes a full settings page for the extension. Use it to configure engine mode, public RPC URL, buy amounts, sell percentages, slippage, priority fee, Jito tip, protection, confirmation, and hotkeys.
-
-## Install In Chrome
+## Quick Start
 
 ```bash
 npm install
 npm run build
 ```
 
-Then:
+Then load it in Chrome:
 
 1. Open `chrome://extensions`.
 2. Enable `Developer mode`.
 3. Click `Load unpacked`.
 4. Select the local `dist/` folder.
-5. Open `https://axiom.trade/` and the floating widget will appear on supported pages.
-6. Open extension settings through `Details` -> `Extension options`.
+5. Open `https://axiom.trade/`.
+6. Open `Details` -> `Extension options` to configure RPC, signer, and presets.
 
-Default test RPC is `https://api.mainnet-beta.solana.com`. It is public and rate-limited, so it is fine for testing but should be replaced with a dedicated Helius/QuickNode endpoint for serious use.
+## Trading Panel
 
-## Security Model
+The overlay is isolated with Shadow DOM so Axiom styles do not break it.
 
-This extension never asks for, stores, uploads, or derives private keys.
+Default preset:
 
-Signing should be handled only by the user's installed wallet extension, such as Phantom or Solflare, when the execution layer is connected.
+- Buy buttons: `0.0005`, `0.5`, `2`, `5` SOL.
+- Sell buttons: `10%`, `30%`, `70%`, `100%`.
+- Hotkeys: `1`/`2`/`3`/`4` for buys, `Q`/`W`/`E`/`R` for sells.
+- Visible mode chips: signer mode, send mode, slippage, priority fee, Jito tip, protection.
 
-The extension can:
+The current balance, position, and order list are still placeholder UI. Real indexing is on the roadmap.
 
-- read token information from supported Axiom pages;
-- build or request Solana transactions;
-- request wallet signature through a browser wallet provider;
-- submit signed transactions to a configured RPC endpoint.
+## Free RPC Keys
 
-The extension must not:
+The public Solana RPC works for quick tests:
+
+```text
+https://api.mainnet-beta.solana.com
+```
+
+For steadier free-tier endpoints, create a key and paste the full URL into the options page:
+
+- Helius: `https://dashboard.helius.dev/`
+- Shyft: `https://shyft.to/get-api-key`
+- QuickNode: `https://www.quicknode.com/`
+- Moralis: `https://admin.moralis.com/`
+
+Moralis is kept as a data API candidate for metadata, balances, and history. It is not used as the trading RPC send path unless a real Solana JSON-RPC endpoint is configured.
+
+API keys stay in Chrome local storage on your machine. They are not sent to a Trench backend.
+
+## Signing Modes
+
+### Browser Wallet Approval
+
+Uses Phantom/Solflare through an injected page-context wallet bridge. Every trade requires wallet signing approval.
+
+Use this mode when you prefer wallet prompts and do not need one-click/no-popup execution.
+
+### Local Hot Wallet
+
+Imports a Solana secret key into the extension for no-popup execution.
+
+Accepted input formats:
+
+```json
+[12, 34, 56, ...]
+```
+
+or:
+
+```json
+{ "secretKey": [12, 34, 56] }
+```
+
+The key must contain 64 bytes. Trench encrypts it locally with a password using PBKDF2 + AES-GCM. When unlocked, raw key bytes live in Chrome `storage.session` until the browser/extension session ends, the wallet is locked, or the wallet is forgotten.
+
+Use this mode for Axiom-style fast execution without Phantom/Solflare approval popups. Use a dedicated trading hot wallet, not a vault wallet.
+
+## Send Modes
+
+### RPC Preflight
+
+Default mode. Sends signed transactions to the configured Solana RPC with:
+
+```text
+skipPreflight: false
+preflightCommitment: confirmed
+maxRetries: 2
+```
+
+This is slower, but gives RPC simulation before broadcast.
+
+### Jito Low Latency
+
+Opt-in mode. Sends signed base64 transactions to:
+
+```text
+https://mainnet.block-engine.jito.wtf/api/v1/transactions
+```
+
+Jito's transaction endpoint forwards directly and uses `skip_preflight=true`. Trench keeps this as a separate mode because it trades simulation safety for speed. `bundleOnly=true` can be enabled from the options page.
+
+## Privacy Model
+
+Trench is local-first:
+
+- No Trench backend.
+- No Trench proxy.
+- No telemetry pipeline.
+- No hosted transaction processor.
+- RPC URLs and API keys stay in Chrome `storage.local`.
+- Encrypted hot-wallet data stays in Chrome `storage.local`.
+- Unlocked hot-wallet bytes stay in Chrome `storage.session`.
+- Signed transactions go directly from your browser to your configured RPC or Jito endpoint.
+
+Trench must not:
 
 - access seed phrases;
-- import private keys;
-- sign without wallet confirmation;
+- upload private keys;
+- sign automatically unless local hot-wallet mode is selected and unlocked;
 - load remote JavaScript;
 - hide platform fees or fee recipients.
 
-The Pump path intentionally avoids `@pump-fun/pump-sdk`, `@solana/spl-token`, and `bn.js` to keep the dependency surface smaller. It derives Pump PDAs locally, decodes the Global, BondingCurve, and FeeConfig accounts directly, creates the user's token account idempotently on buys, and leaves final transaction simulation/approval to the wallet/RPC path.
+## Execution Flow
+
+```text
+Axiom page
+  -> Trench content script detects token context
+  -> Background worker prepares Pump V2 or Jupiter transaction
+  -> Signer path signs VersionedTransaction
+       Browser wallet approval -> Phantom/Solflare
+       Local hot wallet -> unlocked local key in background worker
+  -> Background worker sends signed tx via RPC or Jito
+  -> Overlay shows signature or error inline
+```
+
+## Security Notes
+
+- Use a dedicated hot wallet with limited funds.
+- Keep serious RPC keys out of git and paste them only into local extension settings.
+- Jito low-latency mode skips preflight by design. Use RPC preflight when testing a new route.
+- Public Solana RPC is rate-limited and only suitable for quick checks.
+- The Pump path avoids `@pump-fun/pump-sdk`, `@solana/spl-token`, and direct `bn.js` runtime dependencies to keep the extension bundle smaller and easier to audit.
+
+## Current Limits
+
+- Position, wallet balance, and order list are UI placeholders.
+- Jupiter sell needs real token balance indexing.
+- PumpSwap-specific post-migration routing is not implemented yet.
+- Jito tips are configured in UI but full integrated tip-instruction strategy still needs refinement.
 
 ## Development
 
@@ -85,24 +170,13 @@ npm install
 npm run build
 ```
 
-Then load `dist/` as an unpacked extension in Chromium.
+Build output goes to `dist/`, which can be loaded as an unpacked Chrome extension.
 
-## Execution Layer TODO
+## Roadmap
 
-- Replace mocked balances/positions/orders with indexed wallet state.
-- Add Jupiter sell execution after token balance indexing for migrated tokens.
-- Add PumpSwap-specific route detection after migration.
-- Add Jito bundle/tip execution mode and retry policy.
-
-## Runtime Flow
-
-```text
-Content script UI
-  -> injected page wallet bridge connects Phantom/Solflare
-  -> background service worker prepares Pump V2 tx or Jupiter swap tx
-  -> injected page wallet bridge signs VersionedTransaction
-  -> background service worker sends signed tx to configured RPC
-  -> UI shows signature/error inline
-```
-
-No private key is available to the content script, background worker, or injected script.
+- Real wallet balance and token position indexing.
+- Jupiter sell path for migrated tokens.
+- PumpSwap route detection and execution.
+- Jito tip-floor helper and safer tip-instruction integration.
+- Better transaction history and order tracking.
+- Optional Moralis/Shyft/Helius data adapters for metadata, balances, and history.
