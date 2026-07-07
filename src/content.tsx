@@ -131,7 +131,7 @@ function TrenchOverlay() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [displayedWallet, settingsReady, settingsState.rpcUrl, token.mint, token.symbol]);
+  }, [displayedWallet, settingsReady, settingsState.rpcMode, settingsState.rpcUrl, settingsState.trenchRpcUrl, token.mint, token.symbol]);
 
   useEffect(() => {
     if (!settingsReady) return;
@@ -296,7 +296,7 @@ function TrenchOverlay() {
           <div className="tw-title-wrap">
             <div className="tw-title">Trench</div>
             <div className="tw-mint" title={token.mint ?? 'Mint not found'}>
-              {displayedWallet ? shortMint(displayedWallet) : token.mint ? shortMint(token.mint) : 'No mint'}
+              {token.mint ? `${shortMint(token.mint)} / ${token.source === 'axiom-url' ? 'URL' : token.source === 'dom' ? 'DOM' : 'NA'}` : 'No mint'}
             </div>
           </div>
           <button className="tw-preset tw-no-drag" type="button">

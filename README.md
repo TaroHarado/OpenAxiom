@@ -5,7 +5,7 @@ Trench is an open-source Chrome extension that adds a compact trading terminal o
 ## What It Does
 
 - Injects a draggable 320px trading widget into `https://axiom.trade/*`.
-- Detects the current token/mint from the Axiom page when possible.
+- Detects the current token/mint from Axiom URLs such as `/meme/<mint>?chain=sol`, with DOM detection as fallback.
 - Supports Pump bonding-curve buy/sell through a lightweight manual Pump V2 instruction builder.
 - Supports Jupiter buy/sell routing for migrated/routable tokens.
 - Supports Auto mode: try Pump first, fall back to Jupiter when the curve is complete or missing.
@@ -44,6 +44,8 @@ Default preset:
 - Visible mode chips: signer mode, send mode, slippage, priority fee, Jito tip, protection.
 
 SOL balance and current token balance are fetched through the configured RPC. PnL and the order list are still placeholder UI while full indexing is on the roadmap.
+
+The header shows the detected mint and source, for example `F13T...VtiV / URL`. URL detection has priority over DOM detection so the Axiom meme page route is treated as canonical.
 
 ## Free RPC Keys
 

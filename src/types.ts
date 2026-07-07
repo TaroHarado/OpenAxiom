@@ -33,6 +33,7 @@ export type TradeSettings = {
 export type TokenContext = {
   mint: string | null;
   symbol: string;
+  source: 'axiom-url' | 'dom' | 'unknown';
 };
 
 export type PositionState = {

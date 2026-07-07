@@ -1,12 +1,26 @@
 import type { TokenContext } from './types';
 
 const MINT_PATTERN = /[1-9A-HJ-NP-Za-km-z]{32,44}/;
+const AXIOM_MEME_PATH_PATTERN = /^\/meme\/([1-9A-HJ-NP-Za-km-z]{32,44})(?:\/|$)/;
 
 export function readAxiomTokenContext(): TokenContext {
-  const mint = readMintFromDom() ?? readMintFromUrl();
+  const urlMint = readMintFromUrl();
+  const domMint = readMintFromDom();
+  const mint = urlMint ?? domMint;
   const symbol = readSymbolFromDom() ?? 'YOLO';
 
-  return { mint, symbol };
+  return { mint, symbol, source: urlMint ? 'axiom-url' : domMint ? 'dom' : 'unknown' };
+}
+
+export function parseAxiomMintFromUrl(rawUrl: string): string | null {
+  try {
+    const url = new URL(rawUrl);
+    const memePathMint = url.pathname.match(AXIOM_MEME_PATH_PATTERN)?.[1];
+    if (memePathMint) return memePathMint;
+    return url.href.match(MINT_PATTERN)?.[0] ?? null;
+  } catch {
+    return rawUrl.match(MINT_PATTERN)?.[0] ?? null;
+  }
 }
 
 function readMintFromDom(): string | null {
@@ -31,7 +45,7 @@ function readMintFromDom(): string | null {
 }
 
 function readMintFromUrl(): string | null {
-  return window.location.href.match(MINT_PATTERN)?.[0] ?? null;
+  return parseAxiomMintFromUrl(window.location.href);
 }
 
 function readSymbolFromDom(): string | null {
