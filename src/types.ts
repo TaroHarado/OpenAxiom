@@ -81,6 +81,21 @@ export type SignAndSendLocalRequest = {
   settings: TradeSettings;
 };
 
+export type PositionRequest = {
+  type: 'TRENCH_GET_POSITION';
+  wallet: string;
+  mint: string | null;
+  settings: TradeSettings;
+};
+
+export type PositionResponse = {
+  ok: boolean;
+  walletSol?: number;
+  tokenAmount?: number;
+  tokenDecimals?: number;
+  error?: string;
+};
+
 export type HotWalletRequest =
   | { type: 'TRENCH_HOT_WALLET_STATUS' }
   | { type: 'TRENCH_HOT_WALLET_IMPORT'; secretKey: string; password: string }

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Calculator,
@@ -27,7 +27,7 @@ import {
   savePosition,
   saveSettings
 } from './storage';
-import type { PositionState, ToastKind, TokenContext, TradeOrder, TradeResponse, TradeSettings, TradeSide } from './types';
+import type { PositionResponse, PositionState, ToastKind, TokenContext, TradeOrder, TradeResponse, TradeSettings, TradeSide } from './types';
 import type { WalletBridgeRequest, WalletBridgeResponse } from './types';
 import styles from './styles.css?inline';
 
@@ -36,7 +36,7 @@ declare global {
     chrome?: {
       runtime?: {
         getURL?: (path: string) => string;
-        sendMessage?: (message: unknown, callback: (response: TradeResponse) => void) => void;
+        sendMessage?: (message: unknown, callback: (response: TradeResponse | PositionResponse) => void) => void;
       };
     };
   }
@@ -81,21 +81,14 @@ function TrenchOverlay() {
   const [orders, setOrders] = useState<TradeOrder[]>(sampleOrders);
   const [pendingSide, setPendingSide] = useState<TradeSide | null>(null);
   const [wallet, setWallet] = useState<string | null>(null);
+  const [positionState, setPositionState] = useState<PositionState>(() => emptyPosition(readAxiomTokenContext().symbol));
+  const [positionLoading, setPositionLoading] = useState(false);
+  const [positionError, setPositionError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ kind: ToastKind; text: string; signature?: string } | null>(null);
   const [flash, setFlash] = useState<ToastKind | null>(null);
   const [active, setActive] = useState(false);
   const dragRef = useRef({ dragging: false, dx: 0, dy: 0 });
 
-  const positionState: PositionState = useMemo(
-    () => ({
-      walletSol: 256.55,
-      tokenAmount: 15698.65,
-      tokenSymbol: token.symbol,
-      pnlUsd: 3266,
-      pnlSol: 2.55
-    }),
-    [token.symbol]
-  );
   const displayedWallet = settingsState.signerMode === 'local' ? settingsState.localWalletPublicKey : wallet;
 
   useEffect(() => {
@@ -104,6 +97,41 @@ function TrenchOverlay() {
       setSettingsReady(true);
     });
   }, []);
+
+  useEffect(() => {
+    setPositionState((current) => ({ ...current, tokenSymbol: token.symbol }));
+  }, [token.symbol]);
+
+  useEffect(() => {
+    if (!settingsReady || !displayedWallet) return;
+    let cancelled = false;
+
+    const refresh = async () => {
+      setPositionLoading(true);
+      const response = await getPosition(displayedWallet, token.mint, settingsState);
+      if (cancelled) return;
+      setPositionLoading(false);
+      if (!response.ok) {
+        setPositionError(response.error ?? 'Position unavailable');
+        return;
+      }
+      setPositionError(null);
+      setPositionState({
+        walletSol: response.walletSol ?? 0,
+        tokenAmount: response.tokenAmount ?? 0,
+        tokenSymbol: token.symbol,
+        pnlUsd: 0,
+        pnlSol: 0
+      });
+    };
+
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 12_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [displayedWallet, settingsReady, settingsState.rpcUrl, token.mint, token.symbol]);
 
   useEffect(() => {
     if (!settingsReady) return;
@@ -296,7 +324,7 @@ function TrenchOverlay() {
         <TradeSection
           side="buy"
           title="Buy"
-          meta={<><SolanaMark /> {positionState.walletSol.toFixed(2)} SOL</>}
+          meta={<><SolanaMark /> {positionLoading ? '...' : positionState.walletSol.toFixed(4)} SOL</>}
           buttons={settingsState.buyAmounts}
           selected={settingsState.selectedBuyAmount}
           pending={pendingSide === 'buy'}
@@ -314,7 +342,7 @@ function TrenchOverlay() {
             <span className="tw-position-meta">
               {positionState.tokenAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })} {positionState.tokenSymbol} /{' '}
               <span className={positionState.pnlSol > 0 ? 'tw-positive' : positionState.pnlSol < 0 ? 'tw-negative' : 'tw-muted'}>
-                ${positionState.pnlUsd.toLocaleString()} PNL {positionState.pnlSol.toFixed(2)} SOL
+                {positionError ? positionError : `PNL ${positionState.pnlSol.toFixed(2)} SOL`}
               </span>
             </span>
           }
@@ -532,6 +560,10 @@ function SolanaMark() {
   return <span className="tw-solana" aria-hidden="true" />;
 }
 
+function emptyPosition(symbol: string): PositionState {
+  return { walletSol: 0, tokenAmount: 0, tokenSymbol: symbol, pnlUsd: 0, pnlSol: 0 };
+}
+
 function walletButtonLabel(settings: TradeSettings, wallet: string | null) {
   if (settings.signerMode === 'local') return settings.localWalletPublicKey ? `Hot wallet ${shortMint(settings.localWalletPublicKey)}` : 'Hot wallet not set';
   return wallet ? `Wallet ${shortMint(wallet)}` : 'Connect wallet';
@@ -561,6 +593,18 @@ function prepareTradeMessage(side: TradeSide, amount: number, mint: string | nul
     }
 
     sendMessage({ type: 'TRENCH_PREPARE_TRADE', side, amount, mint, wallet, settings }, resolve);
+  });
+}
+
+function getPosition(wallet: string, mint: string | null, settings: TradeSettings): Promise<PositionResponse> {
+  return new Promise((resolve) => {
+    const sendMessage = window.chrome?.runtime?.sendMessage;
+    if (!sendMessage) {
+      window.setTimeout(() => resolve({ ok: false, error: 'Extension runtime unavailable' }), 200);
+      return;
+    }
+
+    sendMessage({ type: 'TRENCH_GET_POSITION', wallet, mint, settings }, resolve);
   });
 }
 

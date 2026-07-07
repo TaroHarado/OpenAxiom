@@ -12,6 +12,7 @@ Trench is an open-source Chrome extension that adds a compact trading terminal o
 - Supports normal RPC send with preflight simulation.
 - Supports optional Jito low-latency send through the Block Engine transaction endpoint.
 - Supports browser-wallet signing or local hot-wallet signing without approval popups.
+- Reads SOL balance and current token balance through the configured RPC.
 - Stores settings locally in Chrome. Trench does not run a server.
 
 ## Quick Start
@@ -41,7 +42,7 @@ Default preset:
 - Hotkeys: `1`/`2`/`3`/`4` for buys, `Q`/`W`/`E`/`R` for sells.
 - Visible mode chips: signer mode, send mode, slippage, priority fee, Jito tip, protection.
 
-The current balance, position, and order list are still placeholder UI. Real indexing is on the roadmap.
+SOL balance and current token balance are fetched through the configured RPC. PnL and the order list are still placeholder UI while full indexing is on the roadmap.
 
 ## Free RPC Keys
 
@@ -158,7 +159,7 @@ Axiom page
 
 ## Current Limits
 
-- Position, wallet balance, and order list are UI placeholders.
+- PnL and order list are UI placeholders.
 - Jupiter sell needs real token balance indexing.
 - PumpSwap-specific post-migration routing is not implemented yet.
 - Jito tips are configured in UI but full integrated tip-instruction strategy still needs refinement.

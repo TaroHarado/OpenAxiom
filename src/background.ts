@@ -1,12 +1,12 @@
 import { Keypair, VersionedTransaction } from '@solana/web3.js';
-import type { HotWalletRequest, HotWalletResponse, SendSignedTransactionRequest, SignAndSendLocalRequest, TradeRequest, TradeResponse } from './types';
+import type { HotWalletRequest, HotWalletResponse, PositionRequest, PositionResponse, SendSignedTransactionRequest, SignAndSendLocalRequest, TradeRequest, TradeResponse } from './types';
 import { preparePumpTrade } from './pumpEngine';
 
 declare const chrome: {
   runtime: {
     onMessage: {
       addListener: (
-        callback: (message: unknown, sender: unknown, sendResponse: (response: TradeResponse | HotWalletResponse) => void) => boolean | void
+        callback: (message: unknown, sender: unknown, sendResponse: (response: TradeResponse | HotWalletResponse | PositionResponse) => void) => boolean | void
       ) => void;
     };
   };
@@ -34,7 +34,7 @@ const HOT_WALLET_STORAGE_KEY = 'trench.hotWallet.v1';
 const HOT_WALLET_SESSION_KEY = 'trench.hotWallet.session.v1';
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  const request = message as Partial<TradeRequest | SendSignedTransactionRequest | SignAndSendLocalRequest | HotWalletRequest>;
+  const request = message as Partial<TradeRequest | SendSignedTransactionRequest | SignAndSendLocalRequest | HotWalletRequest | PositionRequest>;
 
   if (request.type === 'TRENCH_PREPARE_TRADE') {
     prepareTrade(request as TradeRequest)
@@ -52,6 +52,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (request.type === 'TRENCH_SIGN_AND_SEND_LOCAL') {
     signAndSendLocal(request as SignAndSendLocalRequest)
+      .then(sendResponse)
+      .catch((error: unknown) => sendResponse({ ok: false, error: normalizeError(error) }));
+    return true;
+  }
+
+  if (request.type === 'TRENCH_GET_POSITION') {
+    getPosition(request as PositionRequest)
       .then(sendResponse)
       .catch((error: unknown) => sendResponse({ ok: false, error: normalizeError(error) }));
     return true;
@@ -114,6 +121,41 @@ async function prepareTrade(request: TradeRequest): Promise<TradeResponse> {
     lastValidBlockHeight: swap.lastValidBlockHeight,
     quoteSummary: `${request.amount} SOL via Jupiter`
   };
+}
+
+async function getPosition(request: PositionRequest): Promise<PositionResponse> {
+  if (!isPublicKeyString(request.wallet)) throw new Error('Wallet not connected');
+  validateRpcUrl(request.settings.rpcUrl);
+
+  const balance = await rpcRequest<{ value?: number } | number>(request.settings.rpcUrl, 'getBalance', [request.wallet, { commitment: 'processed' }]);
+  const lamports = typeof balance === 'number' ? balance : balance.value ?? 0;
+  const token = request.mint && isPublicKeyString(request.mint) ? await getTokenBalance(request) : { amount: 0, decimals: 0 };
+
+  return {
+    ok: true,
+    walletSol: lamports / LAMPORTS_PER_SOL,
+    tokenAmount: token.amount,
+    tokenDecimals: token.decimals
+  };
+}
+
+async function getTokenBalance(request: PositionRequest) {
+  const response = await rpcRequest<TokenAccountsByOwnerResponse>(request.settings.rpcUrl, 'getTokenAccountsByOwner', [
+    request.wallet,
+    { mint: request.mint },
+    { encoding: 'jsonParsed', commitment: 'processed' }
+  ]);
+  const accounts = response.value ?? [];
+  let amount = 0;
+  let decimals = 0;
+
+  for (const account of accounts) {
+    const tokenAmount = account.account.data.parsed.info.tokenAmount;
+    amount += Number(tokenAmount.uiAmount ?? 0);
+    decimals = tokenAmount.decimals;
+  }
+
+  return { amount, decimals };
 }
 
 async function signAndSendLocal(request: SignAndSendLocalRequest): Promise<TradeResponse> {
@@ -249,7 +291,7 @@ function isPublicKeyString(value: string | null | undefined) {
   return typeof value === 'string' && PUBLIC_KEY_PATTERN.test(value);
 }
 
-function isHotWalletRequest(request: Partial<TradeRequest | SendSignedTransactionRequest | SignAndSendLocalRequest | HotWalletRequest>) {
+function isHotWalletRequest(request: Partial<TradeRequest | SendSignedTransactionRequest | SignAndSendLocalRequest | PositionRequest | HotWalletRequest>) {
   return typeof request.type === 'string' && request.type.startsWith('TRENCH_HOT_WALLET_');
 }
 
@@ -330,6 +372,23 @@ type HotWalletSession = {
   secretKey: number[];
 };
 
+type TokenAccountsByOwnerResponse = {
+  value?: Array<{
+    account: {
+      data: {
+        parsed: {
+          info: {
+            tokenAmount: {
+              decimals: number;
+              uiAmount: number | null;
+            };
+          };
+        };
+      };
+    };
+  }>;
+};
+
 function parseSecretKey(value: string) {
   const trimmed = value.trim();
   const parsed = JSON.parse(trimmed) as unknown;
@@ -403,6 +462,18 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   }
 
   return payload as T;
+}
+
+async function rpcRequest<T>(rpcUrl: string, method: string, params: unknown[]): Promise<T> {
+  const payload = await fetchJson<{ result?: T; error?: { message?: string } }>(rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: `trench-${method}`, method, params })
+  });
+
+  if (payload.error) throw new Error(payload.error.message ?? `${method} failed`);
+  if (payload.result === undefined) throw new Error(`${method} returned no result`);
+  return payload.result;
 }
 
 function readPayloadError(payload: { error?: string | { message?: string }; message?: string } | null) {
