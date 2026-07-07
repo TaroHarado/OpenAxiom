@@ -84,6 +84,9 @@
         background: #14f195;
         color: #050507;
       }
+      .wide {
+        width: 100%;
+      }
       .hint {
         padding-top: 2px;
         color: #747681;
@@ -106,6 +109,8 @@
         <a class="primary" href="https://axiom.trade/meme/F13Tcyxe19oRt4W4i42Pg5iyttSaXyVqHX3HpyHyVtiV?chain=sol" target="_blank">Open Axiom</a>
         <button id="options" type="button">Options</button>
       </div>
+      <button class="wide" id="force" type="button">Force panel on this tab</button>
+      <div class="hint" id="result"></div>
       <div class="hint">If the page panel is missing, open DevTools Console and look for [Trench] content script mounted.</div>
     </div>
     <script src="popup.js"></script>

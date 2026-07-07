@@ -3,7 +3,7 @@
   "name": "Trench",
   "version": "0.1.0",
   "description": "Open-source floating trench trading terminal for Axiom with custom RPC, local signing, and optional Trench RPC routing.",
-  "permissions": ["storage"],
+  "permissions": ["storage", "activeTab", "scripting", "tabs"],
   "host_permissions": [
     "https://axiom.trade/*",
     "https://*.axiom.trade/*",
