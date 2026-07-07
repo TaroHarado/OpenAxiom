@@ -48,14 +48,20 @@ export type PositionState = {
   pnlSol: number;
 };
 
-export type OrderStatus = 'Active' | 'Failed' | 'Canceled';
+export type OrderStatus = 'Sent' | 'Failed';
 
 export type TradeOrder = {
   id: string;
   side: TradeSide;
-  condition: string;
+  mint: string | null;
+  wallet: string;
+  route?: 'pump' | 'jupiter';
+  signature?: string;
+  summary?: string;
+  error?: string;
   size: string;
   status: OrderStatus;
+  createdAt: number;
 };
 
 export type TradeRequest = {

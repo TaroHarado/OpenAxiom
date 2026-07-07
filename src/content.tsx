@@ -44,13 +44,7 @@ declare global {
 
 const ROOT_ID = 'trench-shadow-root';
 const PNL_LEDGER_KEY = 'trench.pnl.v1';
-
-const sampleOrders: TradeOrder[] = [
-  { id: 'o-1', side: 'sell', condition: 'Price -25% / $0.00339', size: '50%', status: 'Active' },
-  { id: 'o-2', side: 'sell', condition: 'Price -25% / $0.00339', size: '30%', status: 'Active' },
-  { id: 'o-3', side: 'buy', condition: 'Price +25% / $0.00339', size: '5.5 SOL', status: 'Failed' },
-  { id: 'o-4', side: 'buy', condition: 'Price +25% / $0.00339', size: '5.5 SOL', status: 'Canceled' }
-];
+const TRADE_HISTORY_KEY = 'trench.tradeHistory.v1';
 
 type PnlLedger = {
   rawTokenAmount: string;
@@ -86,7 +80,7 @@ function TrenchOverlay() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ordersOpen, setOrdersOpen] = useState(true);
   const [token, setToken] = useState<TokenContext>(() => readAxiomTokenContext());
-  const [orders, setOrders] = useState<TradeOrder[]>(sampleOrders);
+  const [orders, setOrders] = useState<TradeOrder[]>(() => loadTradeHistory());
   const [pendingSide, setPendingSide] = useState<TradeSide | null>(null);
   const [wallet, setWallet] = useState<string | null>(null);
   const [positionState, setPositionState] = useState<PositionState>(() => emptyPosition(readAxiomTokenContext().symbol));
@@ -274,18 +268,32 @@ function TrenchOverlay() {
 
       setFlash('success');
       setToast({ kind: 'success', text: side === 'buy' ? 'Buy filled' : 'Sell filled', signature: response.signature });
+      addTradeHistory(setOrders, {
+        side,
+        mint: token.mint,
+        wallet: publicKey,
+        route: prepared.route,
+        signature: response.signature,
+        summary: prepared.quoteSummary,
+        size: formatTradeValue(side, amount),
+        status: 'Sent'
+      });
       if (token.mint && before?.ok) void refreshPnlAfterTrade(publicKey, token.mint, side, before, settingsState, setPnlLedger, setPositionState);
     } catch (error) {
+      const publicKey = settingsState.signerMode === 'local' ? settingsState.localWalletPublicKey : wallet ?? '';
+      addTradeHistory(setOrders, {
+        side,
+        mint: token.mint,
+        wallet: publicKey,
+        error: error instanceof Error ? error.message : 'RPC timeout',
+        size: formatTradeValue(side, amount),
+        status: 'Failed'
+      });
       setFlash('error');
       setToast({ kind: 'error', text: error instanceof Error ? error.message : 'RPC timeout' });
     } finally {
       setPendingSide(null);
     }
-  }
-
-  function cancelOrder(orderId: string) {
-    setOrders((current) => current.map((order) => (order.id === orderId ? { ...order, status: 'Canceled' } : order)));
-    setToast({ kind: 'info', text: 'Order canceled' });
   }
 
   if (collapsed) {
@@ -385,13 +393,13 @@ function TrenchOverlay() {
                 orders.map((order) => (
                   <div className="tw-order-row" key={order.id}>
                     <span className={`tw-side-badge tw-side-${order.side}`}>{capitalize(order.side)}</span>
-                    <span className="tw-order-condition">{order.condition}</span>
+                    <span className="tw-order-condition" title={order.error ?? order.summary ?? order.mint ?? ''}>{formatOrderSummary(order)}</span>
                     <span className="tw-order-size">{order.size}</span>
                     <span className={`tw-status tw-status-${order.status.toLowerCase()}`}>{order.status}</span>
-                    {order.status === 'Active' ? (
-                      <button className="tw-cancel" type="button" onClick={() => cancelOrder(order.id)}>Cancel</button>
+                    {order.signature ? (
+                      <a className="tw-cancel" href={`https://solscan.io/tx/${order.signature}`} target="_blank" rel="noreferrer">View</a>
                     ) : (
-                      <span className="tw-cancel tw-disabled">-</span>
+                      <span className="tw-cancel tw-disabled">{formatTime(order.createdAt)}</span>
                     )}
                   </div>
                 ))
@@ -692,6 +700,34 @@ function delay(ms: number) {
 
 function minBigInt(a: bigint, b: bigint) {
   return a < b ? a : b;
+}
+
+function addTradeHistory(setOrders: React.Dispatch<React.SetStateAction<TradeOrder[]>>, order: Omit<TradeOrder, 'id' | 'createdAt'>) {
+  setOrders((current) => {
+    const next = [{ ...order, id: `tr-${Date.now()}-${Math.random().toString(16).slice(2)}`, createdAt: Date.now() }, ...current].slice(0, 50);
+    localStorage.setItem(TRADE_HISTORY_KEY, JSON.stringify(next));
+    return next;
+  });
+}
+
+function loadTradeHistory(): TradeOrder[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TRADE_HISTORY_KEY) ?? '[]') as TradeOrder[];
+    return Array.isArray(parsed) ? parsed.slice(0, 50) : [];
+  } catch {
+    return [];
+  }
+}
+
+function formatOrderSummary(order: TradeOrder) {
+  if (order.error) return order.error;
+  if (order.summary) return order.summary;
+  const route = order.route ? order.route.toUpperCase() : 'TX';
+  return order.mint ? `${route} ${shortMint(order.mint)}` : route;
+}
+
+function formatTime(timestamp: number) {
+  return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 function walletButtonLabel(settings: TradeSettings, wallet: string | null) {

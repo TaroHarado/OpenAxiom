@@ -358,7 +358,7 @@ select {
   font-weight: 760;
 }
 
-.tw-status-active,
+.tw-status-sent,
 .tw-positive {
   color: #42f2aa;
 }
@@ -368,7 +368,6 @@ select {
   color: #ff5a7c;
 }
 
-.tw-status-canceled,
 .tw-muted {
   color: #777883;
 }

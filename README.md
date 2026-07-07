@@ -43,7 +43,7 @@ Default preset:
 - Hotkeys: `1`/`2`/`3`/`4` for buys, `Q`/`W`/`E`/`R` for sells.
 - Visible mode chips: signer mode, send mode, slippage, priority fee, Jito tip, protection.
 
-SOL balance and current token balance are fetched through the configured RPC. Realized PnL is tracked locally for trades executed through Trench by comparing pre-trade and post-trade SOL/WSOL/token balance deltas. The order list is still placeholder UI while full indexing is on the roadmap.
+SOL balance and current token balance are fetched through the configured RPC. Realized PnL is tracked locally for trades executed through Trench by comparing pre-trade and post-trade SOL/WSOL/token balance deltas. The orders panel stores local Trench trade history with route, size, status, timestamp, error, and Solscan link when a signature is available.
 
 The header shows the detected mint and source, for example `F13T...VtiV / URL`. URL detection has priority over DOM detection so the Axiom meme page route is treated as canonical.
 
@@ -181,7 +181,7 @@ Axiom page
 ## Current Limits
 
 - PnL starts from trades executed after the local ledger exists. Existing positions need historical fills before full cost basis can be reconstructed.
-- Order list is UI placeholder.
+- The orders panel is local browser history, not an exchange-side order book or indexer.
 - PumpSwap-specific post-migration routing is not implemented yet.
 - Jito tips are configured in UI but full integrated tip-instruction strategy still needs refinement.
 - The Trench RPC router service is configuration-ready, but the hosted router itself must be deployed separately.
