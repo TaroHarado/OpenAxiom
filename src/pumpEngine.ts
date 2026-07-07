@@ -122,14 +122,14 @@ export async function preparePumpTrade(request: TradeRequest): Promise<TradeResp
   const tokenBalance = await getUserTokenBalance(state.connection, state.mint, state.user, state.tokenProgram);
   if (tokenBalance === 0n) throw new Error('No token balance to sell');
 
-  const amount = (tokenBalance * BigInt(Math.round(request.amount))) / 100n;
+  const amount = (tokenBalance * BigInt(Math.round(request.amount * 100))) / 10_000n;
   if (amount === 0n) throw new Error('Sell amount rounds to zero');
 
   const expectedQuoteOut = getSellQuoteAmountFromTokenAmount(state, amount);
   const minSolOutput = applySlippageFloor(expectedQuoteOut, request.settings.slippage);
   if (minSolOutput <= 0n) throw new Error('Pump quote returned zero SOL');
 
-  const feeLamports = calculateTrenchFee(minSolOutput, request);
+  const feeLamports = calculateTrenchFee(expectedQuoteOut, request);
   if (feeLamports > 0n) {
     const treasury = getTrenchFeeRecipient(request);
     instructions.push(createAssociatedTokenAccountIdempotentInstruction(state.user, getAssociatedTokenAddress(NATIVE_MINT, state.user, TOKEN_PROGRAM_ID), state.user, NATIVE_MINT, TOKEN_PROGRAM_ID));

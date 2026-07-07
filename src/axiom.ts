@@ -1,6 +1,7 @@
 import type { TokenContext } from './types';
 
 const MINT_PATTERN = /[1-9A-HJ-NP-Za-km-z]{32,44}/;
+const MINT_EXACT_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const AXIOM_MEME_PATH_PATTERN = /^\/meme\/([1-9A-HJ-NP-Za-km-z]{32,44})(?:\/|$)/;
 
 export function readAxiomTokenContext(): TokenContext {
@@ -29,7 +30,7 @@ function readMintFromDom(): string | null {
   for (const attribute of attributes) {
     const node = document.querySelector(`[${attribute}]`);
     const value = node?.getAttribute(attribute);
-    if (value && MINT_PATTERN.test(value)) return value.match(MINT_PATTERN)?.[0] ?? null;
+    if (value && MINT_EXACT_PATTERN.test(value)) return value;
   }
 
   const textCandidates = Array.from(document.querySelectorAll('a[href], button, [title]'))

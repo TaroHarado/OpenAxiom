@@ -107,6 +107,7 @@ async function prepareTrade(request: TradeRequest): Promise<TradeResponse> {
 
   const trenchFeeLamports = feeRecipient && request.side === 'buy' ? calculateTrenchFee(BigInt(Math.round(request.amount * LAMPORTS_PER_SOL))).toString() : '0';
   const spendLamports = BigInt(Math.round(request.amount * LAMPORTS_PER_SOL)) - BigInt(trenchFeeLamports);
+  if (request.side === 'buy' && spendLamports <= 0n) throw new Error('Trade amount too small after fee');
   const amount = request.side === 'buy' ? spendLamports.toString() : await getJupiterSellAmount(request);
   const quote = await fetchJupiterQuote({
     inputMint: request.side === 'buy' ? SOL_MINT : mint,
@@ -300,7 +301,6 @@ async function isPumpSwapToken(mint: string, rpcUrl: string): Promise<boolean> {
       {
         encoding: 'base64',
         filters: [
-          { dataSize: 300 },
           { memcmp: { offset: 8, bytes: mint } }
         ]
       }

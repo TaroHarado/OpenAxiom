@@ -7,14 +7,17 @@ document.getElementById('import')?.addEventListener('click', () => {
   const secret = document.getElementById('secret');
   const password = document.getElementById('password');
 
-  chrome.runtime.sendMessage({ type: 'TRENCH_HOT_WALLET_IMPORT', secretKey: secret?.value ?? '', password: password?.value ?? '' }, (response) => {
+  const keyValue = secret?.value ?? '';
+  const passValue = password?.value ?? '';
+  if (secret) secret.value = '';
+  if (password) password.value = '';
+
+  chrome.runtime.sendMessage({ type: 'TRENCH_HOT_WALLET_IMPORT', secretKey: keyValue, password: passValue }, (response) => {
+    void chrome.runtime.lastError;
     if (response?.ok) {
-      if (secret) secret.value = '';
-      if (password) password.value = '';
       if (result) result.textContent = `Hot wallet imported: ${shortKey(response.publicKey)}`;
       return;
     }
-
     if (result) result.textContent = response?.error ?? 'Hot wallet import failed.';
   });
 });

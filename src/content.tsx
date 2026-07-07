@@ -653,8 +653,20 @@ function initPulseQuickBuy() {
   const observer = new MutationObserver(() => refreshPulseQuickBuyButtons());
   observer.observe(document.body, { childList: true, subtree: true });
 
-  window.addEventListener('popstate', refreshPulseQuickBuyButtons);
-  window.setInterval(refreshPulseQuickBuyButtons, 2000);
+  const intervalId = window.setInterval(refreshPulseQuickBuyButtons, 2000);
+
+  function cleanup() {
+    observer.disconnect();
+    window.clearInterval(intervalId);
+    window.removeEventListener('popstate', onPopState);
+  }
+
+  function onPopState() {
+    cleanup();
+    initPulseQuickBuy();
+  }
+
+  window.addEventListener('popstate', onPopState);
 }
 
 function refreshPulseQuickBuyButtons() {
