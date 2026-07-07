@@ -1,0 +1,21 @@
+services:
+  rpc-router:
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - ./rpc-router.mjs:/app/rpc-router.mjs:ro
+    command: node rpc-router.mjs
+    ports:
+      - "8787:8787"
+    environment:
+      PORT: "8787"
+      TRENCH_RPC_UPSTREAMS: "${TRENCH_RPC_UPSTREAMS}"
+      TRENCH_RATE_LIMIT: "${TRENCH_RATE_LIMIT:-180}"
+      TRENCH_RATE_WINDOW_MS: "${TRENCH_RATE_WINDOW_MS:-60000}"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8787/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
