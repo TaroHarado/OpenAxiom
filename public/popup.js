@@ -5,14 +5,11 @@ document.getElementById('options')?.addEventListener('click', () => {
 document.getElementById('import')?.addEventListener('click', () => {
   const result = document.getElementById('result');
   const secret = document.getElementById('secret');
-  const password = document.getElementById('password');
 
   const keyValue = secret?.value ?? '';
-  const passValue = password?.value ?? '';
   if (secret) secret.value = '';
-  if (password) password.value = '';
 
-  chrome.runtime.sendMessage({ type: 'TRENCH_HOT_WALLET_IMPORT', secretKey: keyValue, password: passValue }, (response) => {
+  chrome.runtime.sendMessage({ type: 'TRENCH_HOT_WALLET_IMPORT', secretKey: keyValue }, (response) => {
     void chrome.runtime.lastError;
     if (response?.ok) {
       if (result) result.textContent = `Hot wallet imported: ${shortKey(response.publicKey)}`;

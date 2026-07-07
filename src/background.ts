@@ -482,8 +482,8 @@ function isHotWalletRequest(request: { type?: string }) {
 
 async function handleHotWalletRequest(request: HotWalletRequest): Promise<HotWalletResponse> {
   if (request.type === 'TRENCH_HOT_WALLET_STATUS') return getHotWalletStatus();
-  if (request.type === 'TRENCH_HOT_WALLET_IMPORT') return importHotWallet(request.secretKey, request.password);
-  if (request.type === 'TRENCH_HOT_WALLET_UNLOCK') return unlockHotWallet(request.password);
+  if (request.type === 'TRENCH_HOT_WALLET_IMPORT') return importHotWallet(request.secretKey);
+  if (request.type === 'TRENCH_HOT_WALLET_UNLOCK') return unlockHotWallet();
   if (request.type === 'TRENCH_HOT_WALLET_LOCK') return lockHotWallet();
   if (request.type === 'TRENCH_HOT_WALLET_FORGET') return forgetHotWallet();
   return { ok: false, error: 'Unknown hot wallet request' };
@@ -502,10 +502,10 @@ async function getHotWalletStatus(): Promise<HotWalletResponse> {
   };
 }
 
-async function importHotWallet(rawSecretKey: string, password: string): Promise<HotWalletResponse> {
+async function importHotWallet(rawSecretKey: string): Promise<HotWalletResponse> {
   const secretKey = parseSecretKey(rawSecretKey);
   const wallet = Keypair.fromSecretKey(secretKey);
-  const encrypted = await encryptSecretKey(secretKey, password);
+  const encrypted = await encryptSecretKey(secretKey);
   const publicKey = wallet.publicKey.toBase58();
 
   await chrome.storage.local.set({ [HOT_WALLET_STORAGE_KEY]: { ...encrypted, publicKey } });
@@ -514,12 +514,12 @@ async function importHotWallet(rawSecretKey: string, password: string): Promise<
   return { ok: true, hasWallet: true, unlocked: true, publicKey };
 }
 
-async function unlockHotWallet(password: string): Promise<HotWalletResponse> {
+async function unlockHotWallet(): Promise<HotWalletResponse> {
   const stored = await chrome.storage.local.get(HOT_WALLET_STORAGE_KEY);
   const encrypted = stored[HOT_WALLET_STORAGE_KEY] as EncryptedHotWallet | undefined;
   if (!encrypted) throw new Error('No local hot wallet imported');
 
-  const secretKey = await decryptSecretKey(encrypted, password);
+  const secretKey = await decryptSecretKey(encrypted);
   const wallet = Keypair.fromSecretKey(secretKey);
   const publicKey = wallet.publicKey.toBase58();
   await chrome.storage.session.set({ [HOT_WALLET_SESSION_KEY]: { secretKey: Array.from(secretKey), publicKey } });
@@ -601,10 +601,19 @@ function parseSecretKey(value: string) {
   const trimmed = value.trim();
   const rawBytes = parseSecretKeyBytes(trimmed);
   if (!rawBytes) throw new Error('Secret key must be base58, hex, comma/space bytes, JSON array, or an object with secretKey');
-  if (![32, 64].includes(rawBytes.length)) throw new Error('Secret key must contain 32 seed bytes or 64 keypair bytes');
   const bytes = rawBytes.map((item) => Number(item));
   if (bytes.some((item) => !Number.isInteger(item) || item < 0 || item > 255)) throw new Error('Secret key bytes must be 0-255');
-  const keyBytes = Uint8Array.from(bytes);
+  let keyBytes = Uint8Array.from(bytes);
+  if (keyBytes.length <= 32 && keyBytes.length !== 32) {
+    const padded = new Uint8Array(32);
+    padded.set(keyBytes, 32 - keyBytes.length);
+    keyBytes = padded;
+  } else if (keyBytes.length > 32 && keyBytes.length < 64) {
+    const padded = new Uint8Array(64);
+    padded.set(keyBytes, 64 - keyBytes.length);
+    keyBytes = padded;
+  }
+  if (![32, 64].includes(keyBytes.length)) throw new Error(`Secret key has unexpected length ${keyBytes.length} (expected 32 or 64 bytes)`);
   return keyBytes.length === 32 ? Keypair.fromSeed(keyBytes).secretKey : keyBytes;
 }
 
@@ -676,24 +685,31 @@ function isSecretKeyObject(value: unknown): value is { secretKey: unknown[] } {
   return typeof value === 'object' && value !== null && Array.isArray((value as { secretKey?: unknown }).secretKey);
 }
 
-async function encryptSecretKey(secretKey: Uint8Array, password: string) {
-  if (password.length < 8) throw new Error('Password must be at least 8 characters');
-  const salt = crypto.getRandomValues(new Uint8Array(16));
+async function encryptSecretKey(secretKey: Uint8Array) {
+  const rawKey = await getOrCreateDeviceKey();
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await deriveEncryptionKey(password, salt);
+  const key = await crypto.subtle.importKey('raw', rawKey, { name: 'AES-GCM' }, false, ['encrypt']);
   const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: toArrayBuffer(iv) }, key, toArrayBuffer(secretKey));
-  return { cipherText: Array.from(new Uint8Array(encrypted)), iv: Array.from(iv), salt: Array.from(salt) };
+  return { cipherText: Array.from(new Uint8Array(encrypted)), iv: Array.from(iv) };
 }
 
-async function decryptSecretKey(wallet: EncryptedHotWallet, password: string) {
-  const key = await deriveEncryptionKey(password, Uint8Array.from(wallet.salt));
+async function decryptSecretKey(wallet: EncryptedHotWallet) {
+  const rawKey = await getOrCreateDeviceKey();
+  const key = await crypto.subtle.importKey('raw', rawKey, { name: 'AES-GCM' }, false, ['decrypt']);
   const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: toArrayBuffer(Uint8Array.from(wallet.iv)) }, key, toArrayBuffer(Uint8Array.from(wallet.cipherText)));
   return new Uint8Array(decrypted);
 }
 
-async function deriveEncryptionKey(password: string, salt: Uint8Array) {
-  const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
-  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: toArrayBuffer(salt), iterations: 250_000, hash: 'SHA-256' }, material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+const DEVICE_KEY_STORAGE = 'trench.deviceKey.v1';
+
+async function getOrCreateDeviceKey(): Promise<ArrayBuffer> {
+  const stored = await chrome.storage.local.get(DEVICE_KEY_STORAGE);
+  if (stored[DEVICE_KEY_STORAGE]) {
+    return Uint8Array.from(stored[DEVICE_KEY_STORAGE] as number[]).buffer;
+  }
+  const key = crypto.getRandomValues(new Uint8Array(32));
+  await chrome.storage.local.set({ [DEVICE_KEY_STORAGE]: Array.from(key) });
+  return key.buffer;
 }
 
 function toArrayBuffer(bytes: Uint8Array) {

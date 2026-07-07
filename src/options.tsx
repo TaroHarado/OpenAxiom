@@ -21,7 +21,6 @@ function OptionsApp() {
   const [saved, setSaved] = useState(true);
   const [rpcStatus, setRpcStatus] = useState<{ state: 'idle' | 'testing' | 'ok' | 'error'; text: string }>({ state: 'idle', text: '' });
   const [secretKey, setSecretKey] = useState('');
-  const [password, setPassword] = useState('');
   const [hotWallet, setHotWallet] = useState<HotWalletResponse>({ ok: true, hasWallet: false, unlocked: false });
   const [indexMint, setIndexMint] = useState('');
   const [indexWallet, setIndexWallet] = useState('');
@@ -59,17 +58,15 @@ function OptionsApp() {
   }
 
   async function importHotWallet() {
-    const r = await hotWalletRequest({ type: 'TRENCH_HOT_WALLET_IMPORT', secretKey, password });
+    const r = await hotWalletRequest({ type: 'TRENCH_HOT_WALLET_IMPORT', secretKey });
     setHotWallet(r);
     setSecretKey('');
-    setPassword('');
     if (r.publicKey) await applyAndSave({ signerMode: 'local', localWalletPublicKey: r.publicKey });
   }
 
   async function unlockHotWallet() {
-    const r = await hotWalletRequest({ type: 'TRENCH_HOT_WALLET_UNLOCK', password });
+    const r = await hotWalletRequest({ type: 'TRENCH_HOT_WALLET_UNLOCK' });
     setHotWallet(r);
-    setPassword('');
     if (r.publicKey) await applyAndSave({ signerMode: 'local', localWalletPublicKey: r.publicKey });
   }
 
@@ -292,12 +289,7 @@ function OptionsApp() {
               </div>
               <div className="opt-wallet-actions">
                 {hotWallet.hasWallet && !hotWallet.unlocked && (
-                  <>
-                    <Row label="Password">
-                      <input type="password" value={password} onChange={e => setPassword(e.target.value)} />
-                    </Row>
-                    <button className="opt-btn-action" onClick={unlockHotWallet}>Unlock</button>
-                  </>
+                  <button className="opt-btn-action" onClick={unlockHotWallet}>Unlock</button>
                 )}
                 {hotWallet.unlocked && (
                   <button className="opt-btn-ghost-sm" onClick={lockHotWallet}>Lock</button>
@@ -310,7 +302,7 @@ function OptionsApp() {
 
             <section className="opt-card">
               <h3 className="opt-card-title">Import new wallet</h3>
-              <div className="opt-callout">Instant no-popup signing. Key is encrypted with your password and stored locally in Chrome storage only.</div>
+              <div className="opt-callout">Instant no-popup signing. Key is encrypted with a device key stored locally in Chrome — no password needed.</div>
               <Row label="Secret key">
                 <textarea
                   value={secretKey}
@@ -318,9 +310,6 @@ function OptionsApp() {
                   placeholder={'base58 · 0x hex · [12,34,...] · {"secretKey":[...]}'}
                   spellCheck={false}
                 />
-              </Row>
-              <Row label="Password">
-                <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Encrypt with password" />
               </Row>
               <button className="opt-btn-action" onClick={importHotWallet}>Import and unlock</button>
             </section>

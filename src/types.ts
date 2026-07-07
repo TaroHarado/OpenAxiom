@@ -117,8 +117,8 @@ export type PositionResponse = {
 
 export type HotWalletRequest =
   | { type: 'TRENCH_HOT_WALLET_STATUS' }
-  | { type: 'TRENCH_HOT_WALLET_IMPORT'; secretKey: string; password: string }
-  | { type: 'TRENCH_HOT_WALLET_UNLOCK'; password: string }
+  | { type: 'TRENCH_HOT_WALLET_IMPORT'; secretKey: string }
+  | { type: 'TRENCH_HOT_WALLET_UNLOCK' }
   | { type: 'TRENCH_HOT_WALLET_LOCK' }
   | { type: 'TRENCH_HOT_WALLET_FORGET' };
 
