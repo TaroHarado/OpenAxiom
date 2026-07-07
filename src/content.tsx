@@ -7,12 +7,9 @@ import {
   ChevronUp,
   Edit3,
   ExternalLink,
-  GripHorizontal,
   History,
   Loader2,
   Settings,
-  ShieldCheck,
-  Target,
   Wallet,
   X,
   Zap
@@ -441,7 +438,7 @@ function TradeSection(props: {
   return (
     <section className={`tw-trade tw-trade-${side}`}>
       <div className="tw-section-head">
-        <span>{title}</span>
+        <span className="tw-section-label">{title}</span>
         <span className="tw-section-meta">{meta}</span>
       </div>
 
@@ -464,13 +461,12 @@ function TradeSection(props: {
       </div>
 
       <div className="tw-param-row">
-        <ParamChip title="Signer"><Wallet size={12} /> {settings.signerMode === 'local' ? 'Hot' : 'Wallet'}</ParamChip>
-        <ParamChip title="RPC mode"><Zap size={12} /> {settings.rpcMode === 'trench' ? 'Trench 0.1%' : 'Custom 0%'}</ParamChip>
-        <ParamChip title="Send mode"><Zap size={12} /> {settings.sendMode === 'jito' ? 'Jito' : 'RPC'}</ParamChip>
-        <ParamChip title="Slippage"><Target size={12} /> {settings.slippage}%</ParamChip>
-        <ParamChip title="Priority fee"><Zap size={12} /> {settings.autoFee ? `Auto ${settings.autoFeeLevel}` : settings.priorityFee}</ParamChip>
-        <ParamChip title="Jito tip"><GripHorizontal size={12} /> {settings.autoFee ? `Max ${settings.autoFeeMax}` : settings.jitoTip}</ParamChip>
-        <ParamChip title="Protection"><ShieldCheck size={12} /> {settings.protection ? 'On' : 'Off'}</ParamChip>
+        <ParamChip title="Signer">{settings.signerMode === 'local' ? 'HOT' : 'WLT'}</ParamChip>
+        <ParamChip title="RPC mode">{settings.rpcMode === 'trench' ? 'TRN' : 'RPC'}</ParamChip>
+        <ParamChip title="Send mode">{settings.sendMode === 'jito' ? 'JITO' : 'STD'}</ParamChip>
+        <ParamChip title="Slippage">SLP {settings.slippage}%</ParamChip>
+        <ParamChip title="Priority fee">{settings.autoFee ? `AUTO·${settings.autoFeeLevel.slice(0,1).toUpperCase()}` : `FEE·${settings.priorityFee}`}</ParamChip>
+        <ParamChip title="Protection">{settings.protection ? 'PROT' : 'OPEN'}</ParamChip>
       </div>
     </section>
   );
@@ -741,26 +737,25 @@ function installPulseStyle() {
   style.textContent = `
     .${PULSE_BUTTON_CLASS} {
       display: inline-flex;
-      min-width: 76px;
-      height: 26px;
+      height: 24px;
       align-items: center;
       justify-content: center;
-      margin: 4px 4px 0 0;
-      padding: 0 10px;
-      border: 1px solid rgba(20, 241, 149, 0.28);
-      border-radius: 7px;
-      background: linear-gradient(180deg, rgba(20, 241, 149, 0.16), rgba(20, 241, 149, 0.08));
-      color: #dfffee;
+      margin: 3px 3px 0 0;
+      padding: 0 8px;
+      border: 1px solid #18281e;
+      border-radius: 4px;
+      background: #0d0d11;
+      color: #14f195;
       cursor: pointer;
-      font: 700 11px/1 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      letter-spacing: 0;
+      font: 700 9px/1 "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
       white-space: nowrap;
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 6px 18px rgba(20, 241, 149, 0.08);
     }
-    .${PULSE_BUTTON_CLASS}:hover { border-color: rgba(20, 241, 149, 0.55); color: #ffffff; }
-    .${PULSE_BUTTON_CLASS}:disabled { cursor: wait; opacity: 0.82; }
-    .${PULSE_BUTTON_CLASS}[data-state="success"] { border-color: rgba(20, 241, 149, 0.65); background: rgba(20, 241, 149, 0.22); color: #ffffff; }
-    .${PULSE_BUTTON_CLASS}[data-state="error"] { min-width: 112px; border-color: rgba(255, 91, 110, 0.45); background: rgba(255, 91, 110, 0.12); color: #ffdce1; }
+    .${PULSE_BUTTON_CLASS}:hover { border-color: rgba(20, 241, 149, 0.45); background: rgba(20, 241, 149, 0.06); color: #5fffc0; }
+    .${PULSE_BUTTON_CLASS}:disabled { cursor: wait; opacity: 0.5; }
+    .${PULSE_BUTTON_CLASS}[data-state="success"] { border-color: rgba(20, 241, 149, 0.5); color: #14f195; }
+    .${PULSE_BUTTON_CLASS}[data-state="error"] { border-color: #281820; color: #ff607a; }
   `;
   document.head.appendChild(style);
 }
