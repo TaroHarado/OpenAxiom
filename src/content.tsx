@@ -17,7 +17,7 @@ import {
   X,
   Zap
 } from 'lucide-react';
-import { readAxiomTokenContext } from './axiom';
+import { parseAxiomMintFromUrl, readAxiomTokenContext } from './axiom';
 import {
   defaultSettings,
   loadCollapsed,
@@ -43,6 +43,8 @@ declare global {
 }
 
 const ROOT_ID = 'trench-shadow-root';
+const PULSE_STYLE_ID = 'trench-pulse-style';
+const PULSE_BUTTON_CLASS = 'trench-pulse-buy';
 const PNL_LEDGER_KEY = 'trench.pnl.v1';
 const TRADE_HISTORY_KEY = 'trench.tradeHistory.v1';
 
@@ -57,6 +59,7 @@ function mount() {
   if (document.getElementById(ROOT_ID)) return;
   console.info('[Trench] content script mounted', window.location.href);
   injectWalletBridge();
+  initPulseQuickBuy();
 
   const host = document.createElement('div');
   host.id = ROOT_ID;
@@ -254,32 +257,22 @@ function TrenchOverlay() {
     setToast({ kind: 'info', text: side === 'buy' ? 'Buying...' : 'Selling...' });
 
     try {
-      const publicKey = settingsState.signerMode === 'local' ? settingsState.localWalletPublicKey : wallet ?? (await walletRequest('TRENCH_WALLET_CONNECT')).publicKey;
-      if (!publicKey) throw new Error('Wallet not connected');
-      setWallet(publicKey);
-      const before = token.mint ? await getPosition(publicKey, token.mint, settingsState) : null;
-
-      const prepared = await prepareTradeMessage(side, amount, token.mint, publicKey, settingsState);
-      if (!prepared.ok || !prepared.swapTransaction) throw new Error(prepared.error ?? 'Tx prepare failed');
-
-      const response = settingsState.signerMode === 'local'
-        ? await signAndSendLocal(prepared.swapTransaction, settingsState)
-        : await signAndSendBrowserWallet(prepared.swapTransaction, settingsState);
-      if (!response.ok) throw new Error(response.error ?? 'RPC send failed');
+      const result = await runTrade(side, amount, token.mint, settingsState, wallet);
+      setWallet(result.publicKey);
 
       setFlash('success');
-      setToast({ kind: 'success', text: side === 'buy' ? 'Buy filled' : 'Sell filled', signature: response.signature });
+      setToast({ kind: 'success', text: side === 'buy' ? 'Buy filled' : 'Sell filled', signature: result.response.signature });
       addTradeHistory(setOrders, {
         side,
         mint: token.mint,
-        wallet: publicKey,
-        route: prepared.route,
-        signature: response.signature,
-        summary: prepared.quoteSummary,
+        wallet: result.publicKey,
+        route: result.prepared.route,
+        signature: result.response.signature,
+        summary: result.prepared.quoteSummary,
         size: formatTradeValue(side, amount),
         status: 'Sent'
       });
-      if (token.mint && before?.ok) void refreshPnlAfterTrade(publicKey, token.mint, side, before, settingsState, setPnlLedger, setPositionState);
+      if (token.mint && result.before?.ok) void refreshPnlAfterTrade(result.publicKey, token.mint, side, result.before, settingsState, setPnlLedger, setPositionState);
     } catch (error) {
       const publicKey = settingsState.signerMode === 'local' ? settingsState.localWalletPublicKey : wallet ?? '';
       addTradeHistory(setOrders, {
@@ -639,6 +632,151 @@ function SolanaMark() {
   return <span className="tw-solana" aria-hidden="true" />;
 }
 
+async function runTrade(side: TradeSide, amount: number, mint: string | null, settings: TradeSettings, currentWallet: string | null) {
+  const publicKey = settings.signerMode === 'local' ? settings.localWalletPublicKey : currentWallet ?? (await walletRequest('TRENCH_WALLET_CONNECT')).publicKey;
+  if (!publicKey) throw new Error('Wallet not connected');
+
+  const before = mint ? await getPosition(publicKey, mint, settings) : null;
+  const prepared = await prepareTradeMessage(side, amount, mint, publicKey, settings);
+  if (!prepared.ok || !prepared.swapTransaction) throw new Error(prepared.error ?? 'Tx prepare failed');
+
+  const response = settings.signerMode === 'local'
+    ? await signAndSendLocal(prepared.swapTransaction, settings)
+    : await signAndSendBrowserWallet(prepared.swapTransaction, settings);
+  if (!response.ok) throw new Error(response.error ?? 'RPC send failed');
+
+  return { publicKey, before, prepared, response };
+}
+
+function initPulseQuickBuy() {
+  installPulseStyle();
+  refreshPulseQuickBuyButtons();
+
+  const observer = new MutationObserver(() => refreshPulseQuickBuyButtons());
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  window.addEventListener('popstate', refreshPulseQuickBuyButtons);
+  window.setInterval(refreshPulseQuickBuyButtons, 2000);
+}
+
+function refreshPulseQuickBuyButtons() {
+  if (!isPulsePage()) return;
+
+  for (const link of Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/meme/"]'))) {
+    const mint = parseAxiomMintFromUrl(link.href);
+    if (!mint) continue;
+
+    const card = findPulseCard(link);
+    if (!card || card.querySelector(`.${PULSE_BUTTON_CLASS}[data-mint="${mint}"]`)) continue;
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = PULSE_BUTTON_CLASS;
+    button.dataset.mint = mint;
+    button.textContent = 'Quick buy';
+    button.title = `Trench quick buy ${shortMint(mint)}`;
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void pulseQuickBuy(button, mint);
+    });
+
+    const target = findPulseButtonTarget(card) ?? card;
+    target.appendChild(button);
+  }
+}
+
+async function pulseQuickBuy(button: HTMLButtonElement, mint: string) {
+  if (button.disabled) return;
+  button.disabled = true;
+  button.dataset.state = 'pending';
+  button.textContent = 'Buying...';
+
+  try {
+    const settings = await loadExtensionSettings();
+    const amount = settings.selectedBuyAmount || settings.buyAmounts[0] || defaultSettings.selectedBuyAmount;
+    const result = await runTrade('buy', amount, mint, settings, null);
+    addTradeHistoryDirect({
+      side: 'buy',
+      mint,
+      wallet: result.publicKey,
+      route: result.prepared.route,
+      signature: result.response.signature,
+      summary: result.prepared.quoteSummary,
+      size: formatTradeValue('buy', amount),
+      status: 'Sent'
+    });
+    button.dataset.state = 'success';
+    button.textContent = 'Bought';
+    window.setTimeout(() => {
+      button.disabled = false;
+      button.dataset.state = '';
+      button.textContent = 'Quick buy';
+    }, 2600);
+  } catch (error) {
+    const settings = await loadExtensionSettings().catch(() => defaultSettings);
+    addTradeHistoryDirect({
+      side: 'buy',
+      mint,
+      wallet: settings.signerMode === 'local' ? settings.localWalletPublicKey : '',
+      error: error instanceof Error ? error.message : 'Quick buy failed',
+      size: formatTradeValue('buy', settings.selectedBuyAmount || settings.buyAmounts[0] || defaultSettings.selectedBuyAmount),
+      status: 'Failed'
+    });
+    button.dataset.state = 'error';
+    button.textContent = error instanceof Error ? error.message.slice(0, 22) : 'Failed';
+    window.setTimeout(() => {
+      button.disabled = false;
+      button.dataset.state = '';
+      button.textContent = 'Quick buy';
+    }, 3200);
+  }
+}
+
+function installPulseStyle() {
+  if (document.getElementById(PULSE_STYLE_ID)) return;
+
+  const style = document.createElement('style');
+  style.id = PULSE_STYLE_ID;
+  style.textContent = `
+    .${PULSE_BUTTON_CLASS} {
+      display: inline-flex;
+      min-width: 76px;
+      height: 26px;
+      align-items: center;
+      justify-content: center;
+      margin: 4px 4px 0 0;
+      padding: 0 10px;
+      border: 1px solid rgba(20, 241, 149, 0.28);
+      border-radius: 7px;
+      background: linear-gradient(180deg, rgba(20, 241, 149, 0.16), rgba(20, 241, 149, 0.08));
+      color: #dfffee;
+      cursor: pointer;
+      font: 700 11px/1 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+      white-space: nowrap;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 6px 18px rgba(20, 241, 149, 0.08);
+    }
+    .${PULSE_BUTTON_CLASS}:hover { border-color: rgba(20, 241, 149, 0.55); color: #ffffff; }
+    .${PULSE_BUTTON_CLASS}:disabled { cursor: wait; opacity: 0.82; }
+    .${PULSE_BUTTON_CLASS}[data-state="success"] { border-color: rgba(20, 241, 149, 0.65); background: rgba(20, 241, 149, 0.22); color: #ffffff; }
+    .${PULSE_BUTTON_CLASS}[data-state="error"] { min-width: 112px; border-color: rgba(255, 91, 110, 0.45); background: rgba(255, 91, 110, 0.12); color: #ffdce1; }
+  `;
+  document.head.appendChild(style);
+}
+
+function isPulsePage() {
+  return window.location.hostname.endsWith('axiom.trade') && window.location.pathname.startsWith('/pulse');
+}
+
+function findPulseCard(link: HTMLElement) {
+  return link.closest<HTMLElement>('article, li, tr, [role="row"], [data-testid*="card"], [class*="card"], [class*="Card"], [class*="token"], [class*="Token"]') ?? link.parentElement;
+}
+
+function findPulseButtonTarget(card: HTMLElement) {
+  return card.querySelector<HTMLElement>('[class*="action"], [class*="Action"], [class*="button"], [class*="Button"]');
+}
+
 function emptyPosition(symbol: string): PositionState {
   return { walletSol: 0, walletWsol: 0, tokenAmount: 0, tokenRawAmount: '0', tokenSymbol: symbol, costBasisSol: 0, realizedPnlSol: 0, pnlUsd: 0, pnlSol: 0 };
 }
@@ -744,6 +882,12 @@ function addTradeHistory(setOrders: React.Dispatch<React.SetStateAction<TradeOrd
     localStorage.setItem(TRADE_HISTORY_KEY, JSON.stringify(next));
     return next;
   });
+}
+
+function addTradeHistoryDirect(order: Omit<TradeOrder, 'id' | 'createdAt'>) {
+  const current = loadTradeHistory();
+  const next = [{ ...order, id: `tr-${Date.now()}-${Math.random().toString(16).slice(2)}`, createdAt: Date.now() }, ...current].slice(0, 50);
+  localStorage.setItem(TRADE_HISTORY_KEY, JSON.stringify(next));
 }
 
 function loadTradeHistory(): TradeOrder[] {
