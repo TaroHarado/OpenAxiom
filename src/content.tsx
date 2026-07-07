@@ -20,6 +20,7 @@ import {
   loadCollapsed,
   loadExtensionSettings,
   loadPosition,
+  PUBLIC_TEST_RPC_URL,
   saveCollapsed,
   savePosition,
   saveSettings
@@ -323,6 +324,7 @@ function TrenchOverlay() {
         </div>
 
         <nav className="tw-header-actions tw-no-drag" aria-label="Trench actions">
+          {isPublicRpc(settingsState) ? <span className="tw-rpc-warn" title="Public RPC — rate limited, consider adding a private key in Options">PUB</span> : null}
           <IconButton label="Orders"><History size={14} /></IconButton>
           <IconButton label={walletButtonLabel(settingsState, wallet)} onClick={() => connectBrowserWallet(settingsState, setWallet, setToast)}>
             <Wallet size={14} />
@@ -1034,6 +1036,11 @@ function isTypingTarget(target: EventTarget | null) {
 
 function formatTradeValue(side: TradeSide, value: number) {
   return side === 'sell' ? `${value}%` : String(value);
+}
+
+function isPublicRpc(settings: TradeSettings) {
+  const url = settings.rpcMode === 'trench' ? settings.trenchRpcUrl : settings.rpcUrl;
+  return url.includes('api.mainnet-beta.solana.com');
 }
 
 function shortMint(mint: string) {

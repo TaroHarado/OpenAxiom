@@ -95,10 +95,13 @@ async function prepareTrade(request: TradeRequest): Promise<TradeResponse> {
   }
 
   if (request.settings.executionMode === 'auto') {
-    try {
-      return await preparePumpTrade(request);
-    } catch (error) {
-      if (!isPumpFallbackError(error)) throw error;
+    const isPumpSwap = await isPumpSwapToken(mint, getActiveRpcUrl(request.settings));
+    if (!isPumpSwap) {
+      try {
+        return await preparePumpTrade(request);
+      } catch (error) {
+        if (!isPumpFallbackError(error)) throw error;
+      }
     }
   }
 
@@ -285,6 +288,27 @@ async function signAndSendLocal(request: SignAndSendLocalRequest): Promise<Trade
   const transaction = VersionedTransaction.deserialize(base64ToBytes(request.transaction));
   transaction.sign([wallet]);
   return sendSignedTransaction({ type: 'TRENCH_SEND_SIGNED_TRANSACTION', signedTransaction: bytesToBase64(transaction.serialize()), settings: request.settings });
+}
+
+const PUMP_AMM_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
+const PUMP_SWAP_PROGRAM = 'pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA';
+
+async function isPumpSwapToken(mint: string, rpcUrl: string): Promise<boolean> {
+  try {
+    const response = await rpcRequest<{ value: Array<{ account: { owner: string } }> }>(rpcUrl, 'getProgramAccounts', [
+      PUMP_SWAP_PROGRAM,
+      {
+        encoding: 'base64',
+        filters: [
+          { dataSize: 300 },
+          { memcmp: { offset: 8, bytes: mint } }
+        ]
+      }
+    ]);
+    return Array.isArray(response.value) && response.value.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 function isPumpFallbackError(error: unknown) {

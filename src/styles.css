@@ -137,6 +137,21 @@ select {
   gap: 2px;
 }
 
+.tw-rpc-warn {
+  display: inline-flex;
+  height: 16px;
+  align-items: center;
+  padding: 0 4px;
+  border: 1px solid #281820;
+  border-radius: 3px;
+  background: transparent;
+  color: #ff607a;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  cursor: default;
+}
+
 .tw-icon-btn {
   display: grid;
   width: 22px;
