@@ -1369,10 +1369,28 @@ async function handleEvmTrade(req: EvmTradeRequest): Promise<EvmTradeResponse> {
   // tokenIn: if ETH buy, treat as WETH for routing; sell always token→USDG
   const tokenIn  = req.side === 'buy' ? (useEth ? WETH_ADDRESS : USDG_ADDRESS) : req.tokenAddress;
   const tokenOut = req.side === 'buy' ? req.tokenAddress : USDG_ADDRESS;
-  const inDecimals = req.side === 'buy' ? 18 : STOCK_TOKEN_DECIMALS;
-  const amountIn = parseUnits(req.amountUsdg.toString(), inDecimals);
-  const slippage = req.slippageBps ?? 50;
-  const amountOutMinimum = (amountIn * BigInt(10000 - slippage)) / 10000n;
+
+  // For buy: USDG has 6 decimals, WETH/ETH has 18.
+  // For sell: req.amountUsdg is a sell percentage (0-100), so we resolve
+  //           the actual raw token amount from the on-chain balance.
+  let amountIn: bigint;
+  if (req.side === 'sell') {
+    const balHex = await evmCall(req.tokenAddress, encodeBalanceOf(account.address));
+    const balRaw = BigInt(balHex);
+    // percentage is 0-100; use integer math to avoid fp precision loss
+    const pctNumerator = BigInt(Math.round(Math.min(100, Math.max(0, req.amountUsdg)) * 100));
+    amountIn = (balRaw * pctNumerator) / 10000n;
+    if (amountIn === 0n) throw new Error('No token balance to sell (or 0% requested)');
+  } else {
+    // Buy: use correct decimals per input currency
+    const inDecimals = useEth ? 18 : USDG_DECIMALS;
+    amountIn = parseUnits(req.amountUsdg.toString(), inDecimals);
+  }
+
+  // amountOutMinimum: we don't have a live quote, so let the pool determine
+  // the output price; set a nominal 0 minimum (relying on pool price bounds).
+  // A future improvement can add a quoter call here for tighter slippage.
+  const amountOutMinimum = 0n;
 
   const WETH_ABI = [{
     name: 'deposit', type: 'function', stateMutability: 'payable',

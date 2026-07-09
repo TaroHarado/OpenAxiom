@@ -532,18 +532,39 @@ function TrenchOverlay() {
           side="sell"
           title="Sell"
           meta={token.chain === 'robinhood'
-            ? <span className="tw-position-meta">
-                {evmTokenAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })} {token.symbol} /{' '}
-                <span className={(evmPnl?.realizedPnlUsdg ?? 0) > 0 ? 'tw-positive' : (evmPnl?.realizedPnlUsdg ?? 0) < 0 ? 'tw-negative' : 'tw-muted'}>
-                  RPNL {(evmPnl?.realizedPnlUsdg ?? 0).toFixed(2)} USDG
-                </span>
-              </span>
-            : <span className="tw-position-meta">
-                {positionState.tokenAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })} {positionState.tokenSymbol} /{' '}
-                <span className={positionState.pnlSol > 0 ? 'tw-positive' : positionState.pnlSol < 0 ? 'tw-negative' : 'tw-muted'}>
-                  {positionError ? positionError : `RPNL ${positionState.realizedPnlSol.toFixed(4)} SOL`}
-                </span>
-              </span>
+            ? (() => {
+                const rpnl = evmPnl?.realizedPnlUsdg ?? 0;
+                const cost = evmPnl?.costBasisUsdg ?? 0;
+                const pct = cost > 0 ? (rpnl / cost) * 100 : null;
+                const cls = rpnl > 0 ? 'tw-positive' : rpnl < 0 ? 'tw-negative' : 'tw-muted';
+                return (
+                  <span className="tw-position-meta">
+                    {evmTokenAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })} {token.symbol}
+                    {' / '}
+                    <span className={cls}>
+                      {rpnl >= 0 ? '+' : ''}${rpnl.toFixed(2)}
+                      {pct !== null ? ` (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)` : ''}
+                    </span>
+                  </span>
+                );
+              })()
+            : (() => {
+                const rpnl = positionState.realizedPnlSol;
+                const cost = positionState.costBasisSol;
+                const pct = cost > 0 ? (rpnl / cost) * 100 : null;
+                const cls = rpnl > 0 ? 'tw-positive' : rpnl < 0 ? 'tw-negative' : 'tw-muted';
+                return (
+                  <span className="tw-position-meta">
+                    {positionState.tokenAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })} {positionState.tokenSymbol}
+                    {' / '}
+                    <span className={cls}>
+                      {positionError
+                        ? positionError
+                        : <>{rpnl >= 0 ? '+' : ''}{rpnl.toFixed(4)} SOL{pct !== null ? ` (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)` : ''}</>}
+                    </span>
+                  </span>
+                );
+              })()
           }
           buttons={settingsState.sellPercents}
           selected={settingsState.selectedSellPercent}
