@@ -1,8 +1,8 @@
 import { AddressLookupTableAccount, Keypair, PublicKey, SystemProgram, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
-import type { HotWalletRequest, HotWalletResponse, IndexHistoryRequest, IndexHistoryResponse, PositionRequest, PositionResponse, SendSignedTransactionRequest, SignAndSendLocalRequest, TradeRequest, TradeResponse, TradeSettings } from './types';
+import type { HotWalletRequest, HotWalletResponse, IndexHistoryRequest, IndexHistoryResponse, PositionRequest, PositionResponse, SendSignedTransactionRequest, SignAndSendLocalRequest, TradeRequest, TradeResponse, TradeSettings, EvmTradeRequest, EvmTradeResponse, EvmPositionRequest, EvmPositionResponse, EvmWalletRequest, EvmWalletResponse } from './types';
 import { preparePumpTrade } from './pumpEngine';
-import { getActiveRpcUrl, SETTINGS_KEY, usesTrenchRouting } from './storage';
+import { defaultSettings, getActiveRpcUrl, PUBLIC_TEST_RPC_URL, SETTINGS_KEY } from './storage';
 import { createJitoTipInstruction } from './jito';
 
 declare const chrome: {
@@ -34,16 +34,52 @@ const PUBLIC_KEY_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const MAX_BUY_SOL = 100;
 const MAX_PRIORITY_FEE_SOL = 0.1;
 const MAX_SLIPPAGE_PERCENT = 50;
-const TRENCH_FEE_BPS = 10;
 const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
 const CREATE_ATA_IDEMPOTENT_DISCRIMINATOR = 1;
 const HOT_WALLET_STORAGE_KEY = 'trench.hotWallet.v1';
 const HOT_WALLET_SESSION_KEY = 'trench.hotWallet.session.v1';
+const HOT_WALLET_MANUAL_LOCK_KEY = 'trench.hotWallet.manualLock.v1';
+const BALANCE_RPC_FALLBACKS = [PUBLIC_TEST_RPC_URL, 'https://solana-rpc.publicnode.com', 'https://solana.drpc.org'];
 const AUTO_FEE_COMPUTE_UNIT_ESTIMATE = 400_000;
 
+const USDG_DECIMALS = 6;
+const STOCK_TOKEN_DECIMALS = 18;
+const MAX_UINT256 = 2n ** 256n - 1n;
+const EVM_WALLET_STORAGE_KEY = 'trench.evmWallet.v1';
+const EVM_WALLET_SESSION_KEY = 'trench.evmWallet.session.v1';
+const RH_CHAIN_RPC = 'https://rpc.mainnet.chain.robinhood.com';
+const RH_CHAIN_ID = 4663n;
+const USDG_ADDRESS = '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168';
+const WETH_ADDRESS = '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73';
+const UNISWAP_V3_ROUTER = '0xcaf681a66d020601342297493863e78c959e5cb2';
+const UNISWAP_V3_FACTORY = '0x1f7d7550b1b028f7571e69a784071f0205fd2efa';
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+const FEE_TIERS = [500, 100, 3000, 10000];
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  const request = message as Partial<TradeRequest | SendSignedTransactionRequest | SignAndSendLocalRequest | HotWalletRequest | PositionRequest | IndexHistoryRequest>;
+  const request = message as Partial<TradeRequest | SendSignedTransactionRequest | SignAndSendLocalRequest | HotWalletRequest | PositionRequest | IndexHistoryRequest | EvmTradeRequest | EvmPositionRequest | EvmWalletRequest>;
+
+  if (request.type === 'TRENCH_EVM_TRADE') {
+    handleEvmTrade(request as EvmTradeRequest)
+      .then(sendResponse)
+      .catch((error: unknown) => sendResponse({ ok: false, error: normalizeError(error) }));
+    return true;
+  }
+
+  if (request.type === 'TRENCH_EVM_GET_POSITION') {
+    handleEvmPosition(request as EvmPositionRequest)
+      .then(sendResponse)
+      .catch((error: unknown) => sendResponse({ ok: false, error: normalizeError(error) }));
+    return true;
+  }
+
+  if (request.type === 'TRENCH_EVM_WALLET_IMPORT' || request.type === 'TRENCH_EVM_WALLET_STATUS' || request.type === 'TRENCH_EVM_WALLET_LOCK' || request.type === 'TRENCH_EVM_WALLET_FORGET') {
+    handleEvmWalletRequest(request as EvmWalletRequest)
+      .then(sendResponse)
+      .catch((error: unknown) => sendResponse({ ok: false, error: normalizeError(error) }));
+    return true;
+  }
 
   if (request.type === 'TRENCH_PREPARE_TRADE') {
     prepareTrade(request as TradeRequest)
@@ -104,7 +140,7 @@ async function prepareTrade(request: TradeRequest): Promise<TradeResponse> {
   const requestWithFees = await applyAutoFee(request);
   request = requestWithFees;
   const mint = request.mint as string;
-  const feeRecipient = getTrenchFeeRecipient(request.settings);
+  const feeRecipient: string | null = null;
 
   if (request.settings.executionMode === 'pump') {
     return preparePumpTrade(request);
@@ -121,26 +157,22 @@ async function prepareTrade(request: TradeRequest): Promise<TradeResponse> {
     }
   }
 
-  const trenchFeeLamports = feeRecipient && request.side === 'buy' ? calculateTrenchFee(BigInt(Math.round(request.amount * LAMPORTS_PER_SOL))).toString() : '0';
-  const spendLamports = BigInt(Math.round(request.amount * LAMPORTS_PER_SOL)) - BigInt(trenchFeeLamports);
-  if (request.side === 'buy' && spendLamports <= 0n) throw new Error('Trade amount too small after fee');
-  const amount = request.side === 'buy' ? spendLamports.toString() : await getJupiterSellAmount(request);
+  const amount = request.side === 'buy' ? BigInt(Math.round(request.amount * LAMPORTS_PER_SOL)).toString() : await getJupiterSellAmount(request);
   const quote = await fetchJupiterQuote({
     inputMint: request.side === 'buy' ? SOL_MINT : mint,
     outputMint: request.side === 'buy' ? mint : SOL_MINT,
     amount,
-    slippageBps: Math.round(request.settings.slippage * 100),
-    platformFeeBps: feeRecipient && request.side === 'sell' ? TRENCH_FEE_BPS : 0
+    slippageBps: Math.round(request.settings.slippage * 100)
   });
 
-  if (feeRecipient || shouldAddJitoTip(request.settings)) {
-    const swap = await buildJupiterSwapInstructions(request, quote, feeRecipient, BigInt(trenchFeeLamports));
+  if (shouldAddJitoTip(request.settings)) {
+    const swap = await buildJupiterSwapInstructions(request, quote, feeRecipient, 0n);
     return {
       ok: true,
       route: 'jupiter',
       swapTransaction: swap.swapTransaction,
       lastValidBlockHeight: swap.lastValidBlockHeight,
-      quoteSummary: request.side === 'buy' ? `${request.amount} SOL via Jupiter${feeRecipient ? ' incl. 0.1% Trench fee' : ''}` : `${request.amount}% via Jupiter${feeRecipient ? ' incl. 0.1% Trench fee' : ''}`
+      quoteSummary: request.side === 'buy' ? `${request.amount} SOL via Jupiter` : `${request.amount}% via Jupiter`
     };
   }
 
@@ -280,9 +312,8 @@ async function getJupiterSellAmount(request: TradeRequest) {
 
 async function getPosition(request: PositionRequest): Promise<PositionResponse> {
   if (!isPublicKeyString(request.wallet)) throw new Error('Wallet not connected');
-  validateRpcUrl(getActiveRpcUrl(request.settings));
 
-  const balance = await rpcRequest<{ value?: number } | number>(getActiveRpcUrl(request.settings), 'getBalance', [request.wallet, { commitment: 'processed' }]);
+  const balance = await rpcReadWithFallback<{ value?: number } | number>(request.settings, 'getBalance', [request.wallet, { commitment: 'processed' }]);
   const lamports = typeof balance === 'number' ? balance : balance.value ?? 0;
   const token = request.mint && isPublicKeyString(request.mint) ? await getTokenBalance(request) : { amount: 0, rawAmount: 0n, decimals: 0 };
   const wsol = await getTokenBalance({ ...request, mint: SOL_MINT });
@@ -298,7 +329,7 @@ async function getPosition(request: PositionRequest): Promise<PositionResponse> 
 }
 
 async function getTokenBalance(request: Pick<PositionRequest, 'wallet' | 'mint' | 'settings'>) {
-  const response = await rpcRequest<TokenAccountsByOwnerResponse>(getActiveRpcUrl(request.settings), 'getTokenAccountsByOwner', [
+  const response = await rpcReadWithFallback<TokenAccountsByOwnerResponse>(request.settings, 'getTokenAccountsByOwner', [
     request.wallet,
     { mint: request.mint },
     { encoding: 'jsonParsed', commitment: 'processed' }
@@ -320,9 +351,6 @@ async function getTokenBalance(request: Pick<PositionRequest, 'wallet' | 'mint' 
 
 async function signAndSendLocal(request: SignAndSendLocalRequest): Promise<TradeResponse> {
   const wallet = await getUnlockedHotWallet();
-  if (request.settings.localWalletPublicKey && wallet.publicKey.toBase58() !== request.settings.localWalletPublicKey) {
-    throw new Error('Unlocked hot wallet does not match selected local pubkey');
-  }
   const transaction = VersionedTransaction.deserialize(base64ToBytes(request.transaction));
   transaction.sign([wallet]);
   return sendSignedTransaction({ type: 'TRENCH_SEND_SIGNED_TRANSACTION', signedTransaction: bytesToBase64(transaction.serialize()), settings: request.settings });
@@ -440,7 +468,6 @@ function validateTradeRequest(request: TradeRequest) {
   }
   validateRpcUrl(getActiveRpcUrl(settings));
   validateJitoUrl(settings.jitoEndpoint);
-  getTrenchFeeRecipient(settings);
 }
 
 function validateRpcUrl(rawUrl: string) {
@@ -456,7 +483,15 @@ function validateRpcUrl(rawUrl: string) {
 }
 
 function isAllowedRpcHost(hostname: string) {
-  return hostname === 'api.mainnet-beta.solana.com' || hostname === 'mainnet.helius-rpc.com' || hostname === 'rpc.shyft.to' || hostname === 'rpc.trench.trade' || hostname.endsWith('.helius-rpc.com') || hostname.endsWith('.quiknode.pro') || hostname.endsWith('.trench.trade');
+  return hostname === 'api.mainnet-beta.solana.com'
+    || hostname === 'mainnet.helius-rpc.com'
+    || hostname === 'rpc.shyft.to'
+    || hostname === 'rpc.trench.trade'
+    || hostname === 'solana-rpc.publicnode.com'
+    || hostname === 'solana.drpc.org'
+    || hostname.endsWith('.helius-rpc.com')
+    || hostname.endsWith('.quiknode.pro')
+    || hostname.endsWith('.trench.trade');
 }
 
 function validateJitoUrl(rawUrl: string) {
@@ -482,6 +517,7 @@ function isHotWalletRequest(request: { type?: string }) {
 
 async function handleHotWalletRequest(request: HotWalletRequest): Promise<HotWalletResponse> {
   if (request.type === 'TRENCH_HOT_WALLET_STATUS') return getHotWalletStatus();
+  if (request.type === 'TRENCH_HOT_WALLET_REFRESH') return getHotWalletStatus();
   if (request.type === 'TRENCH_HOT_WALLET_IMPORT') return importHotWallet(request.secretKey);
   if (request.type === 'TRENCH_HOT_WALLET_UNLOCK') return unlockHotWallet();
   if (request.type === 'TRENCH_HOT_WALLET_LOCK') return lockHotWallet();
@@ -490,16 +526,21 @@ async function handleHotWalletRequest(request: HotWalletRequest): Promise<HotWal
 }
 
 async function getHotWalletStatus(): Promise<HotWalletResponse> {
-  const stored = await chrome.storage.local.get(HOT_WALLET_STORAGE_KEY);
+  const stored = await chrome.storage.local.get([HOT_WALLET_STORAGE_KEY, HOT_WALLET_MANUAL_LOCK_KEY]);
   const session = await chrome.storage.session.get(HOT_WALLET_SESSION_KEY);
   const encrypted = stored[HOT_WALLET_STORAGE_KEY] as EncryptedHotWallet | undefined;
   const unlocked = session[HOT_WALLET_SESSION_KEY] as HotWalletSession | undefined;
-  return {
+
+  if (encrypted && !unlocked?.secretKey && stored[HOT_WALLET_MANUAL_LOCK_KEY] !== true) {
+    return unlockHotWallet();
+  }
+
+  return withWalletBalance({
     ok: true,
     hasWallet: Boolean(encrypted),
     unlocked: Boolean(unlocked?.secretKey),
     publicKey: unlocked?.publicKey ?? encrypted?.publicKey
-  };
+  });
 }
 
 async function importHotWallet(rawSecretKey: string): Promise<HotWalletResponse> {
@@ -509,9 +550,10 @@ async function importHotWallet(rawSecretKey: string): Promise<HotWalletResponse>
   const publicKey = wallet.publicKey.toBase58();
 
   await chrome.storage.local.set({ [HOT_WALLET_STORAGE_KEY]: { ...encrypted, publicKey } });
+  await chrome.storage.local.remove(HOT_WALLET_MANUAL_LOCK_KEY);
   await chrome.storage.session.set({ [HOT_WALLET_SESSION_KEY]: { secretKey: Array.from(secretKey), publicKey } });
   await setLocalSigner(publicKey);
-  return { ok: true, hasWallet: true, unlocked: true, publicKey };
+  return withWalletBalance({ ok: true, hasWallet: true, unlocked: true, publicKey });
 }
 
 async function unlockHotWallet(): Promise<HotWalletResponse> {
@@ -522,9 +564,10 @@ async function unlockHotWallet(): Promise<HotWalletResponse> {
   const secretKey = await decryptSecretKey(encrypted);
   const wallet = Keypair.fromSecretKey(secretKey);
   const publicKey = wallet.publicKey.toBase58();
+  await chrome.storage.local.remove(HOT_WALLET_MANUAL_LOCK_KEY);
   await chrome.storage.session.set({ [HOT_WALLET_SESSION_KEY]: { secretKey: Array.from(secretKey), publicKey } });
   await setLocalSigner(publicKey);
-  return { ok: true, hasWallet: true, unlocked: true, publicKey };
+  return withWalletBalance({ ok: true, hasWallet: true, unlocked: true, publicKey });
 }
 
 async function setLocalSigner(publicKey: string) {
@@ -535,6 +578,7 @@ async function setLocalSigner(publicKey: string) {
 
 async function forgetHotWallet(): Promise<HotWalletResponse> {
   await chrome.storage.local.remove(HOT_WALLET_STORAGE_KEY);
+  await chrome.storage.local.remove(HOT_WALLET_MANUAL_LOCK_KEY);
   await chrome.storage.session.remove(HOT_WALLET_SESSION_KEY);
   return { ok: true, hasWallet: false, unlocked: false };
 }
@@ -542,8 +586,47 @@ async function forgetHotWallet(): Promise<HotWalletResponse> {
 async function lockHotWallet(): Promise<HotWalletResponse> {
   const stored = await chrome.storage.local.get(HOT_WALLET_STORAGE_KEY);
   const encrypted = stored[HOT_WALLET_STORAGE_KEY] as EncryptedHotWallet | undefined;
+  await chrome.storage.local.set({ [HOT_WALLET_MANUAL_LOCK_KEY]: true });
   await chrome.storage.session.remove(HOT_WALLET_SESSION_KEY);
-  return { ok: true, hasWallet: Boolean(encrypted), unlocked: false, publicKey: encrypted?.publicKey };
+  return withWalletBalance({ ok: true, hasWallet: Boolean(encrypted), unlocked: false, publicKey: encrypted?.publicKey });
+}
+
+async function withWalletBalance(response: HotWalletResponse): Promise<HotWalletResponse> {
+  if (!response.publicKey) return response;
+  try {
+    return { ...response, walletSol: await getWalletSolBalance(response.publicKey) };
+  } catch (error) {
+    return { ...response, balanceError: normalizeError(error) };
+  }
+}
+
+async function getWalletSolBalance(publicKey: string) {
+  const settings = await getStoredTradeSettings();
+  const balance = await rpcReadWithFallback<{ value?: number } | number>(settings, 'getBalance', [publicKey, { commitment: 'processed' }]);
+  const lamports = typeof balance === 'number' ? balance : balance.value ?? 0;
+  return lamports / LAMPORTS_PER_SOL;
+}
+
+async function rpcReadWithFallback<T>(settings: TradeSettings, method: string, params: unknown[]): Promise<T> {
+  const urls = Array.from(new Set([getActiveRpcUrl(settings), ...BALANCE_RPC_FALLBACKS].map((url) => url.trim()).filter(Boolean)));
+  let lastError: unknown;
+
+  for (const url of urls) {
+    try {
+      validateRpcUrl(url);
+      return await rpcRequest<T>(url, method, params);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('RPC read failed');
+}
+
+async function getStoredTradeSettings(): Promise<TradeSettings> {
+  const stored = await chrome.storage.local.get(SETTINGS_KEY);
+  const value = stored[SETTINGS_KEY];
+  return typeof value === 'object' && value !== null ? { ...defaultSettings, ...(value as Partial<TradeSettings>) } : defaultSettings;
 }
 
 async function getUnlockedHotWallet() {
@@ -742,12 +825,6 @@ async function fetchJupiterQuote(params: { inputMint: string; outputMint: string
   return fetchJson<unknown>(url.toString());
 }
 
-function getTrenchFeeRecipient(settings: TradeRequest['settings']) {
-  if (!usesTrenchRouting(settings)) return null;
-  if (!isPublicKeyString(settings.trenchFeeRecipient)) throw new Error('Trench RPC mode requires a fee recipient public key');
-  return settings.trenchFeeRecipient;
-}
-
 function getAssociatedTokenAddress(mint: string, owner: string) {
   return PublicKey.findProgramAddressSync(
     [new PublicKey(owner).toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), new PublicKey(mint).toBuffer()],
@@ -790,10 +867,6 @@ async function loadAddressLookupTables(rpcUrl: string, addresses: string[]) {
     if (!account?.data?.[0]) return [];
     return [new AddressLookupTableAccount({ key: new PublicKey(addresses[index]), state: AddressLookupTableAccount.deserialize(base64ToBytes(account.data[0])) })];
   });
-}
-
-function calculateTrenchFee(amountLamports: bigint) {
-  return (amountLamports * BigInt(TRENCH_FEE_BPS)) / 10_000n;
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -982,4 +1055,411 @@ function classifySwapTx(
   const route: 'pump' | 'jupiter' = isPump ? 'pump' : isJupiter ? 'jupiter' : 'jupiter';
 
   return { side: tokenDelta > 0n ? 'buy' : 'sell', solDelta, route };
+}
+
+// ─── EVM / Robinhood Chain ────────────────────────────────────────────────────
+
+async function evmRpc(method: string, params: unknown[]): Promise<unknown> {
+  const res = await fetch(RH_CHAIN_RPC, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+  });
+  const json = await res.json() as { result?: unknown; error?: { message?: string } };
+  if (json.error) throw new Error(json.error.message ?? 'RPC error');
+  return json.result;
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
+  const arr = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < arr.length; i++) arr[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  return arr;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return '0x' + Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function encodeUint256(n: bigint): string {
+  return n.toString(16).padStart(64, '0');
+}
+
+function encodeAddress(addr: string): string {
+  return addr.slice(2).toLowerCase().padStart(64, '0');
+}
+
+function encodeExactInputSingle(params: {
+  tokenIn: string; tokenOut: string; fee: number; recipient: string;
+  deadline: bigint; amountIn: bigint; amountOutMinimum: bigint; sqrtPriceLimitX96: bigint;
+}): string {
+  const selector = '0x414bf389';
+  return selector
+    + encodeAddress(params.tokenIn)
+    + encodeAddress(params.tokenOut)
+    + encodeUint256(BigInt(params.fee))
+    + encodeAddress(params.recipient)
+    + encodeUint256(params.deadline)
+    + encodeUint256(params.amountIn)
+    + encodeUint256(params.amountOutMinimum)
+    + encodeUint256(params.sqrtPriceLimitX96);
+}
+
+function encodeApprove(spender: string, amount: bigint): string {
+  return '0x095ea7b3' + encodeAddress(spender) + encodeUint256(amount);
+}
+
+function encodeBalanceOf(owner: string): string {
+  return '0x70a08231' + encodeAddress(owner);
+}
+
+function encodeAllowance(owner: string, spender: string): string {
+  return '0xdd62ed3e' + encodeAddress(owner) + encodeAddress(spender);
+}
+
+async function evmCall(to: string, data: string): Promise<string> {
+  return evmRpc('eth_call', [{ to, data }, 'latest']) as Promise<string>;
+}
+
+async function getEvmNonce(address: string): Promise<bigint> {
+  const n = await evmRpc('eth_getTransactionCount', [address, 'latest']);
+  return BigInt(n as string);
+}
+
+async function getEvmGasPrice(): Promise<bigint> {
+  const p = await evmRpc('eth_gasPrice', []);
+  return BigInt(p as string);
+}
+
+function encodeGetPool(tokenA: string, tokenB: string, fee: number): string {
+  return '0x1698ee82'
+    + tokenA.slice(2).toLowerCase().padStart(64, '0')
+    + tokenB.slice(2).toLowerCase().padStart(64, '0')
+    + fee.toString(16).padStart(64, '0');
+}
+
+async function findBestDirectPool(tokenA: string, tokenB: string): Promise<{ pool: string; fee: number } | null> {
+  let best: { pool: string; fee: number; liq: bigint } | null = null;
+  for (const fee of FEE_TIERS) {
+    const data = encodeGetPool(tokenA, tokenB, fee);
+    let pool: string;
+    try {
+      pool = '0x' + ((await evmCall(UNISWAP_V3_FACTORY, data)) as string).slice(26);
+    } catch {
+      continue;
+    }
+    if (pool.toLowerCase() === ZERO_ADDRESS) continue;
+    let liq = 1n; // pool exists; assume usable if liquidity() read fails
+    try {
+      const liqHex = await evmCall(pool, '0x1a686502');
+      liq = BigInt(liqHex as string);
+    } catch {
+      /* keep liq = 1n so an existing pool is not discarded on a flaky RPC read */
+    }
+    if (liq > 0n && (!best || liq > best.liq)) best = { pool, fee, liq };
+  }
+  return best ? { pool: best.pool, fee: best.fee } : null;
+}
+
+type SwapRoute =
+  | { type: 'direct'; fee: number }
+  | { type: 'multihop'; path: `0x${string}` };
+
+async function resolveSwapRoute(tokenIn: string, tokenOut: string): Promise<SwapRoute> {
+  const direct = await findBestDirectPool(tokenIn, tokenOut);
+  if (direct) return { type: 'direct', fee: direct.fee };
+
+  // Try WETH hop
+  const legIn  = await findBestDirectPool(tokenIn, WETH_ADDRESS);
+  const legOut = await findBestDirectPool(WETH_ADDRESS, tokenOut);
+  if (legIn && legOut) {
+    // exactInput path encoding: tokenIn(20) + fee(3) + WETH(20) + fee(3) + tokenOut(20)
+    const feeIn  = legIn.fee.toString(16).padStart(6, '0');
+    const feeOut = legOut.fee.toString(16).padStart(6, '0');
+    const path = ('0x'
+      + tokenIn.slice(2).toLowerCase()
+      + feeIn
+      + WETH_ADDRESS.slice(2).toLowerCase()
+      + feeOut
+      + tokenOut.slice(2).toLowerCase()) as `0x${string}`;
+    return { type: 'multihop', path };
+  }
+
+  throw new Error(`No swap route found for ${tokenIn} → ${tokenOut}`);
+}
+
+async function getEvmChainId(): Promise<bigint> {
+  const id = await evmRpc('eth_chainId', []);
+  return BigInt(id as string);
+}
+
+async function evmSendRawTx(raw: string): Promise<string> {
+  return evmRpc('eth_sendRawTransaction', [raw]) as Promise<string>;
+}
+
+async function getEvmEthBalance(address: string): Promise<string> {
+  const raw = await evmRpc('eth_getBalance', [address, 'latest']) as string;
+  const wei = BigInt(raw);
+  const eth = Number(wei) / 1e18;
+  return eth.toFixed(6);
+}
+
+async function getEvmTokenBalance(token: string, owner: string): Promise<string> {
+  const data = encodeBalanceOf(owner);
+  const raw = await evmCall(token, data);
+  const bal = BigInt(raw);
+  const decimals = token.toLowerCase() === USDG_ADDRESS.toLowerCase() ? USDG_DECIMALS : STOCK_TOKEN_DECIMALS;
+  return (Number(bal) / 10 ** decimals).toFixed(6);
+}
+
+function privateKeyToEvmAddress(privateKeyHex: string): string {
+  const { secp256k1 } = globalThis as unknown as { secp256k1?: { getPublicKey: (pk: Uint8Array, compressed: boolean) => Uint8Array } };
+  if (!secp256k1) throw new Error('secp256k1 not available in service worker — use imported viem');
+  const pkBytes = hexToBytes(privateKeyHex);
+  const pubKey = secp256k1.getPublicKey(pkBytes, false).slice(1);
+  return keccak256Address(pubKey);
+}
+
+function keccak256Address(_pubKey: Uint8Array): string {
+  // Placeholder — address derivation requires keccak256
+  // In production this is replaced by viem's privateKeyToAddress
+  return '0x0000000000000000000000000000000000000000';
+}
+
+async function getEvmDeviceKey(): Promise<CryptoKey> {
+  const stored = (await chrome.storage.local.get(['trench.evmDeviceKey.v1']))['trench.evmDeviceKey.v1'] as string | undefined;
+  if (stored) {
+    const raw = Uint8Array.from(atob(stored), c => c.charCodeAt(0));
+    return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  }
+  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+  const exported = await crypto.subtle.exportKey('raw', key);
+  const b64 = btoa(String.fromCharCode(...new Uint8Array(exported)));
+  await chrome.storage.local.set({ 'trench.evmDeviceKey.v1': b64 });
+  return key;
+}
+
+async function evmEncrypt(plaintext: string): Promise<string> {
+  const key = await getEvmDeviceKey();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const enc = new TextEncoder();
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(plaintext));
+  const combined = new Uint8Array(iv.byteLength + ct.byteLength);
+  combined.set(iv, 0);
+  combined.set(new Uint8Array(ct), iv.byteLength);
+  return btoa(String.fromCharCode(...combined));
+}
+
+async function evmDecrypt(encoded: string): Promise<string> {
+  const key = await getEvmDeviceKey();
+  const combined = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
+  const iv = combined.slice(0, 12);
+  const ct = combined.slice(12);
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+  return new TextDecoder().decode(pt);
+}
+
+async function getUnlockedEvmKey(): Promise<string | null> {
+  const session = (await chrome.storage.session.get([EVM_WALLET_SESSION_KEY]))[EVM_WALLET_SESSION_KEY] as string | undefined;
+  if (session) return session;
+  const stored = (await chrome.storage.local.get([EVM_WALLET_STORAGE_KEY]))[EVM_WALLET_STORAGE_KEY] as string | undefined;
+  if (!stored) return null;
+  try {
+    const pk = await evmDecrypt(stored);
+    await chrome.storage.session.set({ [EVM_WALLET_SESSION_KEY]: pk });
+    return pk;
+  } catch {
+    return null;
+  }
+}
+
+async function handleEvmWalletRequest(req: EvmWalletRequest): Promise<EvmWalletResponse> {
+  if (req.type === 'TRENCH_EVM_WALLET_IMPORT') {
+    let pk = req.privateKey.trim();
+    if (!pk.startsWith('0x')) pk = '0x' + pk;
+    if (!/^0x[0-9a-fA-F]{64}$/.test(pk)) throw new Error('Invalid EVM private key');
+    const { privateKeyToAccount } = await import('viem/accounts');
+    const account = privateKeyToAccount(pk as `0x${string}`);
+    const encrypted = await evmEncrypt(pk);
+    await chrome.storage.local.set({ [EVM_WALLET_STORAGE_KEY]: encrypted });
+    await chrome.storage.session.set({ [EVM_WALLET_SESSION_KEY]: pk });
+    await chrome.storage.local.set({ 'trench.evmAddress.v1': account.address });
+    return { ok: true, hasWallet: true, unlocked: true, address: account.address };
+  }
+
+  if (req.type === 'TRENCH_EVM_WALLET_STATUS') {
+    const hasWallet = !!(await chrome.storage.local.get([EVM_WALLET_STORAGE_KEY]))[EVM_WALLET_STORAGE_KEY];
+    const pk = await getUnlockedEvmKey();
+    const address = (await chrome.storage.local.get(['trench.evmAddress.v1']))['trench.evmAddress.v1'] as string | undefined;
+    return { ok: true, hasWallet, unlocked: !!pk, address: address !== 'pending' ? address : undefined };
+  }
+
+  if (req.type === 'TRENCH_EVM_WALLET_LOCK') {
+    await chrome.storage.session.remove([EVM_WALLET_SESSION_KEY]);
+    return { ok: true };
+  }
+
+  if (req.type === 'TRENCH_EVM_WALLET_FORGET') {
+    await chrome.storage.local.remove([EVM_WALLET_STORAGE_KEY, 'trench.evmAddress.v1', 'trench.evmDeviceKey.v1']);
+    await chrome.storage.session.remove([EVM_WALLET_SESSION_KEY]);
+    return { ok: true };
+  }
+
+  return { ok: false, error: 'Unknown EVM wallet request' };
+}
+
+async function handleEvmPosition(req: EvmPositionRequest): Promise<EvmPositionResponse> {
+  const [ethBalance, tokenBalance] = await Promise.all([
+    getEvmEthBalance(req.wallet),
+    getEvmTokenBalance(req.tokenAddress, req.wallet),
+  ]);
+  return { ok: true, ethBalance, tokenBalance };
+}
+
+async function handleEvmTrade(req: EvmTradeRequest): Promise<EvmTradeResponse> {
+  const pk = await getUnlockedEvmKey();
+  if (!pk) throw new Error('EVM wallet locked — import or unlock first');
+
+  const { createWalletClient, createPublicClient, http, defineChain, parseUnits } = await import('viem');
+  const { privateKeyToAccount } = await import('viem/accounts');
+
+  const robinhoodChain = defineChain({
+    id: 4663,
+    name: 'Robinhood Chain',
+    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+    rpcUrls: { default: { http: [RH_CHAIN_RPC] }, public: { http: [RH_CHAIN_RPC] } },
+    blockExplorers: { default: { name: 'Blockscout', url: 'https://robinhoodchain.blockscout.com' } },
+  });
+
+  const account = privateKeyToAccount(pk as `0x${string}`);
+
+  // Store the real derived address
+  await chrome.storage.local.set({ 'trench.evmAddress.v1': account.address });
+
+  const publicClient = createPublicClient({ chain: robinhoodChain, transport: http(RH_CHAIN_RPC) });
+  const walletClient = createWalletClient({ account, chain: robinhoodChain, transport: http(RH_CHAIN_RPC) });
+
+  const ERC20_ABI = [
+    { name: 'allowance', type: 'function', stateMutability: 'view', inputs: [{ name: 'owner', type: 'address' }, { name: 'spender', type: 'address' }], outputs: [{ name: '', type: 'uint256' }] },
+    { name: 'approve', type: 'function', stateMutability: 'nonpayable', inputs: [{ name: 'spender', type: 'address' }, { name: 'amount', type: 'uint256' }], outputs: [{ name: '', type: 'bool' }] },
+  ] as const;
+
+  const EXACT_INPUT_SINGLE_ABI = [{
+    name: 'exactInputSingle', type: 'function', stateMutability: 'payable',
+    inputs: [{ name: 'params', type: 'tuple', components: [
+      { name: 'tokenIn', type: 'address' }, { name: 'tokenOut', type: 'address' },
+      { name: 'fee', type: 'uint24' }, { name: 'recipient', type: 'address' },
+      { name: 'amountIn', type: 'uint256' },
+      { name: 'amountOutMinimum', type: 'uint256' }, { name: 'sqrtPriceLimitX96', type: 'uint160' },
+    ]}],
+    outputs: [{ name: 'amountOut', type: 'uint256' }],
+  }] as const;
+
+  const EXACT_INPUT_ABI = [{
+    name: 'exactInput', type: 'function', stateMutability: 'payable',
+    inputs: [{ name: 'params', type: 'tuple', components: [
+      { name: 'path', type: 'bytes' }, { name: 'recipient', type: 'address' },
+      { name: 'amountIn', type: 'uint256' }, { name: 'amountOutMinimum', type: 'uint256' },
+    ]}],
+    outputs: [{ name: 'amountOut', type: 'uint256' }],
+  }] as const;
+
+  const useEth = req.inputCurrency === 'ETH' && req.side === 'buy';
+
+  // tokenIn: if ETH buy, treat as WETH for routing; sell always token→USDG
+  const tokenIn  = req.side === 'buy' ? (useEth ? WETH_ADDRESS : USDG_ADDRESS) : req.tokenAddress;
+  const tokenOut = req.side === 'buy' ? req.tokenAddress : USDG_ADDRESS;
+  const inDecimals = req.side === 'buy' ? 18 : STOCK_TOKEN_DECIMALS;
+  const amountIn = parseUnits(req.amountUsdg.toString(), inDecimals);
+  const slippage = req.slippageBps ?? 50;
+  const amountOutMinimum = (amountIn * BigInt(10000 - slippage)) / 10000n;
+
+  const WETH_ABI = [{
+    name: 'deposit', type: 'function', stateMutability: 'payable',
+    inputs: [], outputs: [],
+  }] as const;
+
+  const route = await resolveSwapRoute(tokenIn, tokenOut);
+
+  if (useEth) {
+    // Wrap ETH → WETH first
+    const wrapHash = await walletClient.writeContract({
+      address: WETH_ADDRESS as `0x${string}`,
+      abi: WETH_ABI,
+      functionName: 'deposit',
+      value: amountIn,
+    });
+    await publicClient.waitForTransactionReceipt({ hash: wrapHash });
+  }
+
+  if (!useEth) {
+    // ERC20 approve only needed for USDG or stock token input
+    const allowance = await publicClient.readContract({
+      address: tokenIn as `0x${string}`,
+      abi: ERC20_ABI,
+      functionName: 'allowance',
+      args: [account.address, UNISWAP_V3_ROUTER as `0x${string}`],
+    });
+    if (allowance < amountIn) {
+      const approveTx = await walletClient.writeContract({
+        address: tokenIn as `0x${string}`,
+        abi: ERC20_ABI,
+        functionName: 'approve',
+        args: [UNISWAP_V3_ROUTER as `0x${string}`, MAX_UINT256],
+      });
+      await publicClient.waitForTransactionReceipt({ hash: approveTx });
+    }
+  } else {
+    // Approve WETH for router
+    const allowance = await publicClient.readContract({
+      address: WETH_ADDRESS as `0x${string}`,
+      abi: ERC20_ABI,
+      functionName: 'allowance',
+      args: [account.address, UNISWAP_V3_ROUTER as `0x${string}`],
+    });
+    if (allowance < amountIn) {
+      const approveTx = await walletClient.writeContract({
+        address: WETH_ADDRESS as `0x${string}`,
+        abi: ERC20_ABI,
+        functionName: 'approve',
+        args: [UNISWAP_V3_ROUTER as `0x${string}`, MAX_UINT256],
+      });
+      await publicClient.waitForTransactionReceipt({ hash: approveTx });
+    }
+  }
+
+  let hash: `0x${string}`;
+  if (route.type === 'direct') {
+    hash = await walletClient.writeContract({
+      address: UNISWAP_V3_ROUTER as `0x${string}`,
+      abi: EXACT_INPUT_SINGLE_ABI,
+      functionName: 'exactInputSingle',
+      args: [{
+        tokenIn: tokenIn as `0x${string}`,
+        tokenOut: tokenOut as `0x${string}`,
+        fee: route.fee,
+        recipient: account.address,
+        amountIn,
+        amountOutMinimum,
+        sqrtPriceLimitX96: 0n,
+      }],
+    });
+  } else {
+    hash = await walletClient.writeContract({
+      address: UNISWAP_V3_ROUTER as `0x${string}`,
+      abi: EXACT_INPUT_ABI,
+      functionName: 'exactInput',
+      args: [{
+        path: route.path,
+        recipient: account.address,
+        amountIn,
+        amountOutMinimum,
+      }],
+    });
+  }
+
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  if (receipt.status !== 'success') throw new Error('EVM transaction reverted');
+
+  return { ok: true, hash };
 }

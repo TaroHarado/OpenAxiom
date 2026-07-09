@@ -1,242 +1,136 @@
 # Trench
 
-Trench is an open-source Chrome extension that adds a compact trading terminal on top of Axiom. It is built for fast Solana memecoin execution: small floating UI, local settings, local signing, direct RPC/Jito submission, and an optional managed Trench RPC mode.
+**Built by traders, for traders.** Trench is a free, open-source Chrome/Chromium extension that puts a fast trading terminal directly on top of the charts you already use — **gmgn** and **Axiom** — across **Solana** and **Robinhood Chain**.
+
+Stop paying hosted terminals a cut of every trade to fund their marketing. Trench takes **0% platform fee**, holds no funds, and runs on **your own RPC** (free public or paid — your choice). Your keys stay encrypted on your device.
+
+- **0% fees, always.** No default fee, no optional fee, no treasury cut.
+- **Bring your own RPC.** Speed comes from your endpoint, not a paywall.
+- **Zero custody.** Keys are device-encrypted; nothing is sent to any server.
+- **Open source, MIT.** Fork it, audit it, own it.
 
 ## What It Does
 
-- Injects a draggable 320px trading widget into `https://axiom.trade/*`.
-- Detects the current token/mint from Axiom URLs such as `/meme/<mint>?chain=sol`, with DOM detection as fallback.
-- Supports Pump bonding-curve buy/sell through a lightweight manual Pump V2 instruction builder.
-- Supports Jupiter buy/sell routing for migrated/routable tokens.
-- Supports Auto mode: try Pump first, fall back to Jupiter when the curve is complete or missing.
-- Supports normal RPC send with preflight simulation.
-- Supports optional Jito low-latency send through the Block Engine transaction endpoint.
-- Supports browser-wallet signing or local hot-wallet signing without approval popups.
-- Supports Custom RPC with `0%` Trench fee or Trench RPC with a disclosed `0.1%` routing fee.
-- Reads SOL balance and current token balance through the configured RPC.
-- Stores settings locally in Chrome. Custom RPC mode does not use a Trench backend.
+- **Floating overlay** — a draggable buy/sell terminal injected over any token page on `gmgn.ai` and `axiom.trade`. Presets, hotkeys, slippage, live position and PnL, always one keystroke away.
+- **Quick-buy on cards** — a BUY button injected onto every token card in the gmgn feed. Snipe from the list without opening the token page (address is read at click time, so it survives DOM recycling).
+- **Two chains**
+  - **Solana** — buy/sell through Jupiter and a lightweight Pump.fun instruction builder, with an Auto mode that tries Pump first and falls back to Jupiter.
+  - **Robinhood Chain** — buy/sell through Uniswap V3 (USDG or ETH input) with automatic pool selection and a slippage guard.
+- **Wallet manager** — a two-column Wallets page in Options: Solana hot wallet on the left, Robinhood Chain (ERC-20) wallet on the right, each with live balances (SOL / ETH + USDG) and import / lock / forget controls.
+- **Automatic local PnL** — realized PnL is tracked per token from real pre-trade vs post-trade balance deltas. On Solana it is denominated in SOL (so priority fee / Jito tip / gas are already included); on Robinhood Chain it is denominated in USDG.
+- **Send modes** — standard RPC with preflight simulation, or opt-in Jito low-latency send. Auto priority fee estimates a per-trade budget from recent network fees.
+- **Signing** — use your browser wallet (Phantom/Solflare approval) or an imported hot key for no-popup execution.
 
 ## Quick Start
 
+Requires Node.js 18+.
+
 ```bash
+git clone https://github.com/TaroHarado/Trench.git
+cd Trench
 npm install
 npm run build
 ```
 
-Then load it in Chrome:
+Load it into Chromium (Chrome / Brave / Edge):
 
 1. Open `chrome://extensions`.
-2. Enable `Developer mode`.
-3. Click `Load unpacked`.
-4. Select the local `dist/` folder.
-5. Open `https://axiom.trade/`.
-6. Open `Details` -> `Extension options` to configure RPC, signer, and presets.
+2. Enable **Developer mode** (top-right).
+3. Click **Load unpacked**.
+4. Select the generated `dist/` folder.
+5. Pin the Trench icon for quick popup access.
 
-## Trading Panel
+## Your First Trade in 5 Steps
 
-The overlay is isolated with Shadow DOM so Axiom styles do not break it.
+1. **Import a wallet.** Open the extension popup (or **Options → Wallets**). Import a **Solana** hot key (base58 / hex / bytes / JSON array) and/or a **Robinhood Chain** ERC-20 key (`0x` + 64 hex). Keys are encrypted on your device. Use a dedicated burner wallet, not your vault.
+2. **Fund it.**
+   - *Solana:* send SOL to the imported address. SOL covers both trades and network fees.
+   - *Robinhood Chain:* send **USDG** to trade with, plus a little **ETH** for gas. Balances show up on the Wallets page.
+3. **Open a market.** Go to `gmgn.ai` or `axiom.trade` and open any token, or use the BUY button on a card in the gmgn feed. The floating terminal mounts automatically.
+4. **Set your size and buy.** Pick a buy amount (or press `1`–`4`), confirm if confirmations are on. The order is signed locally and sent through your RPC.
+5. **Watch PnL and sell.** The Sell section shows your position and realized PnL (SOL on Solana, USDG on Robinhood Chain), updating automatically after each fill — fees included. Sell with a percent button (or `Q`/`W`/`E`/`R`).
 
-Default preset:
+## RPC — Bring Your Own
 
-- Buy buttons: `0.0005`, `0.5`, `2`, `5` SOL.
-- Sell buttons: `10%`, `30%`, `70%`, `100%`.
-- Hotkeys: `1`/`2`/`3`/`4` for buys, `Q`/`W`/`E`/`R` for sells.
-- Visible mode chips: signer mode, send mode, slippage, priority fee, Jito tip, protection.
-- Auto fee is enabled by default with `fast` level and a `0.003 SOL` cap.
-
-SOL balance and current token balance are fetched through the configured RPC. Realized PnL is tracked locally for trades executed through Trench by comparing pre-trade and post-trade SOL/WSOL/token balance deltas. The orders panel stores local Trench trade history with route, size, status, timestamp, error, and Solscan link when a signature is available.
-
-Overlay settings include local reset controls for clearing browser trade history and local PnL during testing.
-
-The header shows the detected mint and source, for example `F13T...VtiV / URL`. URL detection has priority over DOM detection so the Axiom meme page route is treated as canonical.
-
-## Free RPC Keys
-
-Trench has two RPC modes:
-
-- Custom RPC: paste your own endpoint and pay `0%` Trench fee.
-- Trench RPC: use the configured Trench router and pay a transparent `0.1%` routing fee.
-
-The public Solana RPC works for quick tests:
-
-```text
-https://api.mainnet-beta.solana.com
-```
-
-For steadier free-tier endpoints, create a key and paste the full URL into the options page:
+Trench ships pre-configured with free public endpoints (**PublicNode** and **dRPC**) — no API key required. Public RPC is fine for getting started but is rate-limited under load. For steadier throughput, paste your own endpoint in **Options → Advanced**:
 
 - Helius: `https://dashboard.helius.dev/`
 - Shyft: `https://shyft.to/get-api-key`
 - QuickNode: `https://www.quicknode.com/`
-- Moralis: `https://admin.moralis.com/`
 
-Moralis is kept as a data API candidate for metadata, balances, and history. It is not used as the trading RPC send path unless a real Solana JSON-RPC endpoint is configured.
-
-API keys stay in Chrome local storage on your machine. In Custom RPC mode, signed transactions go directly to your selected endpoint. In Trench RPC mode, signed transactions go to the configured Trench router.
-
-## Routing Fee
-
-Trench RPC mode applies a `0.1%` routing fee, which is 10 basis points.
-
-- Jupiter buy: Trench routes 99.9% of the SOL input through Jupiter and adds a same-transaction SOL transfer for the 0.1% fee.
-- Jupiter sell: Trench uses Jupiter `platformFeeBps=10` with a treasury WSOL token account.
-- Pump buy: Trench sends 99.9% of the SOL input to Pump and adds a same-transaction SOL transfer for the 0.1% fee.
-- Pump sell: Trench sells through Pump, then transfers 0.1% of the slippage-protected minimum SOL output from the user's WSOL account to the treasury WSOL account in the same transaction.
-
-Custom RPC mode does not add a Trench routing fee.
+Either way, the platform fee is the same: **nothing**. API keys and RPC URLs stay in Chrome local storage on your machine, and signed transactions go directly from your browser to your chosen endpoint.
 
 ## Signing Modes
 
-### Browser Wallet Approval
+### Browser wallet approval
+Uses Phantom/Solflare through an injected page-context bridge. Every trade requires wallet approval. Use this when you prefer explicit prompts.
 
-Uses Phantom/Solflare through an injected page-context wallet bridge. Every trade requires wallet signing approval.
+### Local hot wallet
+Imports a key into the extension for no-popup execution.
 
-Use this mode when you prefer wallet prompts and do not need one-click/no-popup execution.
+- **Solana** accepts base58 private-key strings, `0x`/raw hex, comma/space-separated bytes, JSON byte arrays, and exported `secretKey` objects. A 32-byte seed is expanded into a keypair; a 64-byte keypair is used directly.
+- **Robinhood Chain** accepts a standard `0x` + 64-hex EVM private key.
 
-### Local Hot Wallet
-
-Imports a Solana secret key into the extension for no-popup execution.
-
-Accepted input formats:
-
-```json
-[12, 34, 56, ...]
-```
-
-or:
-
-```json
-{ "secretKey": [12, 34, 56] }
-```
-
-Trench also accepts base58 private-key strings, `0x` hex, raw hex, and comma/space-separated byte strings. A 32-byte seed is expanded into a Solana keypair; a 64-byte keypair is used directly. Importing or unlocking a hot wallet automatically switches the signer mode to `Local hot wallet`.
-
-Trench encrypts it locally with a password using PBKDF2 + AES-GCM. When unlocked, raw key bytes live in Chrome `storage.session` until the browser/extension session ends, the wallet is locked, or the wallet is forgotten.
-
-Use this mode for Axiom-style fast execution without Phantom/Solflare approval popups. Use a dedicated trading hot wallet, not a vault wallet.
+Keys are encrypted locally (PBKDF2 + AES-GCM). When unlocked, raw key material lives in Chrome `storage.session` until the session ends, the wallet is locked, or it is forgotten. Use a dedicated trading hot wallet, not a vault wallet.
 
 ## Send Modes
 
-### RPC Preflight
+- **RPC preflight** (default) — sends to your Solana RPC with `skipPreflight: false`, `preflightCommitment: confirmed`. Slower, but simulates before broadcast.
+- **Jito low latency** (opt-in) — sends base64 transactions to the Jito Block Engine transaction endpoint (`skip_preflight=true`). Trades simulation safety for speed. `bundleOnly` can be enabled in Options.
+- **Auto fee** — estimates a per-trade priority budget from recent prioritization fees, applies a level floor (`normal` / `fast` / `turbo`), and caps it by `Auto max SOL`. In Jito mode, part of the budget becomes an explicit tip.
 
-Default mode. Sends signed transactions to the configured Solana RPC with:
+## PnL Model
 
-```text
-skipPreflight: false
-preflightCommitment: confirmed
-maxRetries: 2
-```
+PnL is measured from real balance deltas around each trade Trench executes, so trading costs are baked in:
 
-This is slower, but gives RPC simulation before broadcast.
+- **Solana** — everything is denominated in SOL, so priority fee, Jito tip, and network fees are already reflected in the number. Buys build cost basis; sells realize PnL.
+- **Robinhood Chain** — denominated in USDG. Buys add USDG cost basis; sells realize `USDG received − proportional cost basis`, which includes the swap price and pool fee. Gas is paid separately in ETH.
 
-### Jito Low Latency
-
-Opt-in mode. Sends signed base64 transactions to:
-
-```text
-https://mainnet.block-engine.jito.wtf/api/v1/transactions
-```
-
-Jito's transaction endpoint forwards directly and uses `skip_preflight=true`. Trench keeps this as a separate mode because it trades simulation safety for speed. `bundleOnly=true` can be enabled from the options page.
-
-### Auto Fee
-
-Auto fee estimates a per-trade priority budget from `getRecentPrioritizationFees` on the active RPC. It samples recent priority fees, applies a level floor, then caps the total fee by `Auto max SOL`.
-
-- `normal`: lower floor and percentile for quieter slots.
-- `fast`: default Axiom-style setting for normal trading.
-- `turbo`: higher percentile and floor for congestion.
-
-In RPC mode, the auto budget becomes priority fee. In Jito mode, part of the capped budget is converted into an explicit Jito tip transfer instruction and the rest remains priority fee.
-
-### Fast Delivery Layer
-
-Falcon Client and Yellowstone Jet are transaction delivery layers, not Pump/Jupiter instruction builders. They take an already built and signed Solana transaction and forward it faster through QUIC/TPU-style infrastructure.
-
-- Falcon Client: persistent QUIC connection, mTLS, datagram-first delivery with stream ack backup.
-- Yellowstone Jet: Solana QUIC sender/proxy with JSON-RPC `sendTransaction`, HTTP `/api/v1/transactions`, raw bytes/base58/base64 submission, simulation/sanitization, SwQoS, and metrics.
-
-Browsers cannot directly use those Rust QUIC clients as a Chrome content script delivery path. The correct Trench architecture is: browser builds/signs locally, then sends the signed transaction bytes to a trusted HTTPS relay that fans out to Jet/Falcon/Jito/TPU endpoints.
+PnL starts from the first trade after the local ledger exists. The **History** tab can rescan recent Solana swaps to reconstruct cost basis for a token already in the wallet. The orders panel is a local browser log, not an exchange order book.
 
 ## Privacy Model
 
-Trench is local-first by default:
+Trench is local-first:
 
-- No Trench backend in Custom RPC mode.
-- No Trench proxy in Custom RPC mode.
-- No telemetry pipeline.
-- No hosted transaction processor.
-- RPC URLs and API keys stay in Chrome `storage.local`.
-- Encrypted hot-wallet data stays in Chrome `storage.local`.
-- Unlocked hot-wallet bytes stay in Chrome `storage.session`.
-- Signed transactions go directly from your browser to your configured RPC/Jito endpoint in Custom mode.
-- Signed transactions go to the configured Trench router in Trench RPC mode.
+- No backend, no proxy, no telemetry, no hosted transaction processor.
+- RPC URLs, API keys, encrypted keys, settings, and PnL all stay in Chrome storage on your device.
+- Signed transactions go directly from your browser to your configured RPC / Jito endpoint.
 
-Trench must not:
-
-- access seed phrases;
-- upload private keys;
-- sign automatically unless local hot-wallet mode is selected and unlocked;
-- load remote JavaScript;
-- hide platform fees or fee recipients.
+Trench never accesses seed phrases, uploads private keys, signs automatically outside unlocked hot-wallet mode, loads remote JavaScript, or hides fees (there are none).
 
 ## Execution Flow
 
 ```text
-Axiom page
-  -> Trench content script detects token context
-  -> Background worker prepares Pump V2 or Jupiter transaction
-  -> Signer path signs VersionedTransaction
-       Browser wallet approval -> Phantom/Solflare
-       Local hot wallet -> unlocked local key in background worker
-  -> Background worker sends signed tx via RPC or Jito
-  -> Overlay shows signature or error inline
+gmgn / Axiom page
+  -> content script detects the token + chain
+  -> background worker builds the swap (Jupiter/Pump on Solana, Uniswap V3 on Robinhood Chain)
+  -> signer path signs the transaction
+       browser wallet approval -> Phantom/Solflare
+       local hot wallet        -> unlocked key in the background worker
+  -> background worker sends via RPC or Jito
+  -> overlay shows the signature/hash and updates PnL
 ```
 
 ## Security Notes
 
 - Use a dedicated hot wallet with limited funds.
-- Keep serious RPC keys out of git and paste them only into local extension settings.
-- Jito low-latency mode skips preflight by design. Use RPC preflight when testing a new route.
-- Public Solana RPC is rate-limited and only suitable for quick checks.
-- Trench RPC mode needs a valid treasury public key configured before trades can be prepared.
-- The Pump path avoids `@pump-fun/pump-sdk`, `@solana/spl-token`, and direct `bn.js` runtime dependencies to keep the extension bundle smaller and easier to audit.
-
-## Current Limits
-
-- PnL starts from trades executed after the local ledger exists. Existing positions need historical fills before full cost basis can be reconstructed.
-- The orders panel is local browser history, not an exchange-side order book or indexer.
-- PumpSwap-specific post-migration routing is not implemented yet.
-- The Trench RPC router service is configuration-ready, but the hosted router itself must be deployed separately.
-- Falcon/Yellowstone Jet fast delivery requires a separate backend relay; it is not a browser-only feature.
+- Keep serious RPC keys out of git; paste them only into local extension settings.
+- Jito mode skips preflight by design — use RPC preflight when testing a new route.
+- Public RPC is rate-limited; use your own endpoint for heavy sessions.
 
 ## Development
 
 ```bash
 npm install
-npm run build
+npm run build   # tsc --noEmit + vite build (popup/options) + content build
 ```
 
-Build output goes to `dist/`, which can be loaded as an unpacked Chrome extension.
+Build output goes to `dist/`, loadable as an unpacked extension. The landing page lives in `docs/` and can be served statically (e.g. `npx serve docs`).
 
-Run a local RPC router process for deployment testing:
+## Disclaimer
 
-```bash
-TRENCH_RPC_UPSTREAMS="https://api.mainnet-beta.solana.com,https://your-helius-url" npm run router
-```
+Trench is experimental open-source software provided "as is", without warranty of any kind. It is not affiliated with Robinhood, gmgn.ai, Axiom, Solana, Jupiter, or Uniswap. Trading new tokens carries substantial risk of loss. Verify what you sign. Never trade with funds you cannot afford to lose.
 
-The router exposes:
+## License
 
-- `POST /rpc`: JSON-RPC proxy with upstream retry and scoring.
-- `GET /health`: redacted upstream status.
-
-Deploy the router behind HTTPS before using it as `Trench RPC router` in the extension. Chrome extension validation requires an HTTPS RPC URL.
-
-## Roadmap
-
-- PumpSwap route detection and execution.
-- Hosted Trench RPC router with health scoring, rate limiting, and provider rotation.
-- HTTPS signed-transaction relay that forwards to Yellowstone Jet, Falcon, Jito, and standard RPC in parallel.
-- Jito tip-floor tuning from live block engine data.
-- Better transaction history and order tracking.
-- Optional Moralis/Shyft/Helius data adapters for metadata, balances, and history.
+MIT — see [LICENSE](./LICENSE).

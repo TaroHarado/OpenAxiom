@@ -1,0 +1,770 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Trench — open-source trading terminal for Robinhood Chain &amp; Solana</title>
+<meta name="description" content="Built by traders, for traders. A free, open-source terminal that overlays gmgn.ai and Axiom with quick-buy on every token card. 0% platform fees, bring your own RPC, keys on your device, zero custody." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Inconsolata:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+:root {
+  --bg:           #000;
+  --fg:           #fff;
+  --surface:      #0a0a0a;
+  --surface-hov:  #141414;
+  --code-bg:      #0d0d0d;
+  --muted:        #6f6f6f;
+  --muted-fg:     #a3a3a3;
+  --border:       rgba(255,255,255,.10);
+  --border-str:   rgba(255,255,255,.22);
+  --accent:       #fff;
+  --accent-hov:   #d9d9d9;
+  --accent-soft:  rgba(255,255,255,.08);
+  --rh:           #00c805;
+  --rh-soft:      rgba(0,200,5,.10);
+  --rh-border:    rgba(0,200,5,.34);
+  --rh-on:        #000;
+  --font-sans:    "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono:    "Inconsolata", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --ease:         cubic-bezier(.22,1,.36,1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; color-scheme: dark; }
+
+body {
+  background:
+    linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px) 0 0 / 72px 72px,
+    linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px) 0 0 / 72px 72px,
+    var(--bg);
+  color: var(--muted-fg);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.6;
+  letter-spacing: -.01em;
+  overflow-x: hidden;
+}
+
+::selection { background: rgba(0,200,5,.25); color: #fff; }
+a { color: inherit; text-decoration: none; }
+
+/* ── layout helpers ── */
+.wrap { width: min(1120px, calc(100% - 32px)); margin: 0 auto; }
+.gap1 { display: flex; flex-direction: column; gap: 1px; }
+
+/* ── topbar ── */
+.topbar {
+  position: fixed; inset: 0 0 auto; z-index: 50;
+  height: 44px; border-bottom: 1px solid var(--border-str);
+  background: rgba(0,0,0,.88); backdrop-filter: blur(10px);
+}
+.topbar-inner {
+  display: flex; align-items: center; gap: 0;
+  height: 100%; width: min(1120px, calc(100% - 32px)); margin: 0 auto;
+}
+.brand {
+  display: flex; align-items: center; gap: 9px;
+  font-family: var(--font-mono); font-size: 13px; font-weight: 800;
+  color: var(--fg); letter-spacing: .18em; text-transform: uppercase;
+  margin-right: 24px;
+}
+.brand-logo {
+  width: 22px; height: 22px; display: grid; place-items: center;
+  border: 1px solid var(--border-str); background: var(--surface);
+  font-size: 9px; font-weight: 800; color: var(--rh); letter-spacing: 0;
+}
+nav.nav { display: flex; align-items: center; }
+.nav-link {
+  display: inline-block; padding: 4px 10px;
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--muted-fg);
+  transition: color .15s var(--ease);
+  white-space: nowrap;
+}
+.nav-link:hover { color: var(--fg); }
+.nav-link.is-active {
+  background: var(--fg); color: var(--bg); font-weight: 800;
+}
+.top-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.btn-rh {
+  padding: 6px 12px; border: 1px solid var(--rh); background: var(--rh);
+  color: var(--rh-on); font-family: var(--font-mono); font-size: 11px;
+  font-weight: 800; letter-spacing: .12em; text-transform: uppercase;
+  cursor: pointer; transition: opacity .15s;
+}
+.btn-rh:hover { opacity: .85; }
+
+/* ── main offset ── */
+main { padding-top: 44px; }
+
+/* ── panel primitives ── */
+.panel {
+  border: 1px solid var(--border-str); background: var(--surface);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.panel-bar {
+  background: var(--fg); color: var(--bg);
+  padding: 0 10px; height: 28px;
+  display: flex; align-items: center;
+  font-family: var(--font-mono); font-size: 11px; font-weight: 800;
+  letter-spacing: .12em; text-transform: uppercase;
+  flex-shrink: 0;
+}
+.panel-bar--ghost {
+  background: transparent; color: var(--muted-fg);
+  border-bottom: 1px solid var(--border-str); height: 30px;
+}
+.panel-body { padding: 12px; flex: 1; }
+.panel-body--p0 { padding: 0; flex: 1; }
+
+/* ── kv rows ── */
+.kv {
+  display: flex; justify-content: space-between; align-items: center;
+  border-bottom: 1px solid var(--border); padding: 6px 10px;
+  font-family: var(--font-mono); font-size: 12px;
+}
+.kv:last-child { border-bottom: none; }
+.kv-key { color: var(--muted); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; }
+.kv-val { color: var(--fg); font-variant-numeric: tabular-nums; text-align: right; }
+.kv-val.green { color: var(--rh); }
+
+/* ── counter grid ── */
+.counter-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; }
+.counter-box {
+  background: var(--bg); border: 1px solid var(--border-str);
+  padding: 14px 12px; display: flex; flex-direction: column; align-items: center;
+  gap: 4px; text-align: center;
+}
+.counter-box b { font-family: var(--font-mono); font-size: 22px; font-weight: 800; color: var(--fg); letter-spacing: -.02em; line-height: 1; font-variant-numeric: tabular-nums; }
+.counter-box span { font-family: var(--font-mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+
+/* ── status dot ── */
+.dot {
+  display: inline-block; width: 6px; height: 6px;
+  border-radius: 50%; background: var(--fg); flex-shrink: 0;
+}
+.dot--rh { background: var(--rh); box-shadow: 0 0 14px var(--rh-border); animation: pulse 1.8s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+/* ── buttons ── */
+.btn-command {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: 34px; padding: 0 14px;
+  border: 1px solid var(--fg); background: var(--fg); color: var(--bg);
+  font-family: var(--font-mono); font-size: 11px; font-weight: 800;
+  letter-spacing: .12em; text-transform: uppercase; cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.btn-command:hover { background: var(--accent-hov); }
+.btn-ghost {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: 34px; padding: 0 14px;
+  border: 1px solid var(--border-str); background: transparent; color: var(--muted-fg);
+  font-family: var(--font-mono); font-size: 11px; font-weight: 800;
+  letter-spacing: .12em; text-transform: uppercase; cursor: pointer;
+  transition: color .15s, border-color .15s;
+}
+.btn-ghost:hover { color: var(--fg); border-color: var(--border-str); }
+.btn-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+/* ── hero ── */
+.hero-section { padding: 0; }
+.hero-grid {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 1px;
+  border: 1px solid var(--border-str);
+  background: var(--border-str);
+  margin-top: 24px;
+}
+@media (max-width: 900px) { .hero-grid { grid-template-columns: 1fr; } }
+
+.hero-left {
+  background: var(--surface);
+  padding: 28px;
+  position: relative;
+  overflow: hidden;
+}
+.hero-left::before {
+  content: '';
+  position: absolute; top: 0; right: 0;
+  width: 380px; height: 380px;
+  background: radial-gradient(circle at 80% 0%, rgba(0,200,5,.14), transparent 55%);
+  pointer-events: none;
+}
+.eyebrow {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--font-mono); font-size: 11px; font-weight: 800;
+  letter-spacing: .18em; text-transform: uppercase; color: var(--rh);
+  margin-bottom: 16px;
+}
+h1 {
+  font-family: var(--font-sans); font-size: clamp(34px, 6vw, 72px);
+  font-weight: 900; color: var(--fg);
+  line-height: .94; letter-spacing: -.04em;
+  margin-bottom: 18px;
+}
+h1 .accent { color: var(--rh); }
+.hero-copy { font-size: 15px; color: var(--muted-fg); line-height: 1.6; max-width: 44ch; margin-bottom: 24px; }
+.hero-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 24px; }
+.tag {
+  font-family: var(--font-mono); font-size: 10.5px; font-weight: 700;
+  letter-spacing: .08em; text-transform: uppercase;
+  padding: 4px 9px; border: 1px solid var(--border-str); color: var(--muted-fg);
+  background: var(--bg);
+}
+
+/* ── terminal widget (right of hero) ── */
+.hero-terminal {
+  background: var(--surface);
+  display: flex; flex-direction: column;
+}
+.terminal-body { padding: 10px; flex: 1; }
+.t-section { margin-bottom: 10px; }
+.t-label {
+  font-family: var(--font-mono); font-size: 9px; font-weight: 800;
+  letter-spacing: .14em; text-transform: uppercase;
+  padding: 0 0 6px; margin-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.t-label.buy { color: var(--rh); }
+.t-label.sell { color: var(--muted); }
+.t-label-row { display: flex; justify-content: space-between; align-items: center; }
+.t-bal { font-family: var(--font-mono); font-size: 9px; color: var(--muted); }
+.t-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.t-btn {
+  height: 32px; display: grid; place-items: center;
+  border: 1px solid var(--border-str); background: var(--bg);
+  font-family: var(--font-mono); font-size: 11px; font-weight: 700;
+  color: var(--muted-fg);
+}
+.t-btn.active-buy { border-color: var(--rh-border); background: var(--rh-soft); color: var(--rh); }
+.t-btn.active-sell { border-color: var(--border-str); background: #171717; color: var(--fg); }
+.t-divider { height: 1px; background: var(--border); margin: 10px 0; }
+.t-chain {
+  font-family: var(--font-mono); font-size: 9px; color: var(--muted);
+  letter-spacing: .06em; padding: 6px 0 0;
+  display: flex; align-items: center; gap: 6px;
+}
+
+/* ── generic section ── */
+section { padding: 56px 0; }
+.section-header { margin-bottom: 32px; }
+.kicker {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 800;
+  letter-spacing: .18em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 10px;
+}
+h2 {
+  font-family: var(--font-sans); font-size: clamp(26px, 4vw, 46px);
+  font-weight: 900; color: var(--fg);
+  line-height: .96; letter-spacing: -.035em; margin-bottom: 12px;
+}
+.section-copy { color: var(--muted-fg); font-size: 15px; max-width: 52ch; }
+
+/* ── 3-col panel grid ── */
+.panel-grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--border-str); }
+@media (max-width: 860px) { .panel-grid3 { grid-template-columns: 1fr; } }
+.panel-grid3 .panel { border: none; border-radius: 0; }
+
+.panel-grid2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--border-str); }
+@media (max-width: 720px) { .panel-grid2 { grid-template-columns: 1fr; } }
+.panel-grid2 .panel { border: none; }
+
+/* ── steps ── */
+.steps { display: flex; flex-direction: column; gap: 1px; background: var(--border-str); }
+.step {
+  display: grid; grid-template-columns: 52px 1fr; gap: 0;
+  background: var(--surface);
+}
+.step-n {
+  display: grid; place-items: center;
+  border-right: 1px solid var(--border-str);
+  font-family: var(--font-mono); font-size: 13px; font-weight: 800;
+  color: var(--rh); background: var(--bg);
+  letter-spacing: 0;
+}
+.step-body { padding: 16px 20px; }
+.step-body h3 {
+  font-family: var(--font-sans); font-size: 15px; font-weight: 700;
+  color: var(--fg); margin-bottom: 6px; letter-spacing: -.01em;
+}
+.step-body p { font-size: 14px; color: var(--muted-fg); line-height: 1.55; margin-bottom: 10px; }
+.step-body p:last-child { margin-bottom: 0; }
+
+/* ── code block ── */
+pre.code {
+  font-family: var(--font-mono); font-size: 12px; color: var(--muted-fg);
+  background: var(--code-bg); border: 1px solid var(--border);
+  padding: 10px 12px; line-height: 1.65; overflow-x: auto;
+}
+pre.code .rh { color: var(--rh); }
+pre.code .c { color: var(--muted); }
+
+/* ── trust panel ── */
+.trust-strip {
+  border: 1px solid var(--rh-border); background: var(--rh-soft);
+  padding: 10px 14px;
+  display: flex; align-items: center; gap: 10px;
+  font-family: var(--font-mono); font-size: 11px; font-weight: 800;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--rh);
+  margin-bottom: 1px;
+}
+
+/* ── faq ── */
+.faq { display: flex; flex-direction: column; gap: 1px; background: var(--border-str); }
+details {
+  background: var(--surface); padding: 0;
+}
+summary {
+  list-style: none; cursor: pointer;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 16px;
+  font-size: 14.5px; font-weight: 700; color: var(--fg);
+  font-family: var(--font-sans); letter-spacing: -.01em;
+}
+summary::-webkit-details-marker { display: none; }
+.sum-icon {
+  font-family: var(--font-mono); font-size: 16px; color: var(--rh);
+  transition: transform .2s var(--ease); flex-shrink: 0; line-height: 1;
+}
+details[open] .sum-icon { transform: rotate(45deg); }
+details p {
+  padding: 0 16px 14px; font-size: 13.5px; color: var(--muted-fg); line-height: 1.6;
+}
+
+/* ── final cta ── */
+.cta-panel {
+  border: 1px solid var(--rh-border);
+  background: var(--surface);
+  position: relative; overflow: hidden;
+}
+.cta-panel::before {
+  content: '';
+  position: absolute; inset: 0;
+  background: radial-gradient(80% 120% at 50% 0%, rgba(0,200,5,.12), transparent 55%);
+  pointer-events: none;
+}
+.cta-inner {
+  position: relative; z-index: 1;
+  padding: 44px 32px; text-align: center;
+}
+.cta-inner h2 { margin-bottom: 10px; }
+.cta-inner .section-copy { margin: 0 auto 24px; }
+
+/* ── footer ── */
+footer {
+  border-top: 1px solid var(--border-str); padding: 24px 0;
+  margin-top: 1px;
+}
+.foot-inner {
+  display: flex; flex-wrap: wrap; gap: 12px;
+  align-items: center; justify-content: space-between;
+}
+.foot-brand { font-family: var(--font-mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.foot-links { display: flex; gap: 20px; font-family: var(--font-mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
+.foot-links a { color: var(--muted); transition: color .15s; }
+.foot-links a:hover { color: var(--fg); }
+.disclaimer { margin-top: 20px; font-size: 11.5px; color: var(--muted); line-height: 1.6; font-family: var(--font-mono); }
+
+/* ── scroll reveal ── */
+@media (prefers-reduced-motion: no-preference) {
+  .enter { animation: enterAnim .5s var(--ease) both; }
+  @keyframes enterAnim {
+    from { opacity: 0; transform: translateY(14px); filter: blur(4px); }
+    to   { opacity: 1; transform: none; filter: none; }
+  }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="#top">
+      <span class="brand-logo">TR</span>
+      Trench
+    </a>
+    <nav class="nav">
+      <a class="nav-link is-active" href="#compare">Fees</a>
+      <a class="nav-link" href="#what">What</a>
+      <a class="nav-link" href="#features">Features</a>
+      <a class="nav-link" href="#install">Install</a>
+      <a class="nav-link" href="#why-free">Why free</a>
+      <a class="nav-link" href="#faq">FAQ</a>
+    </nav>
+    <div class="top-actions">
+      <a class="btn-rh" href="#install">Install</a>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ── HERO ── -->
+  <section class="hero-section">
+    <div class="wrap">
+
+      <div class="trust-strip enter">
+        <span class="dot dot--rh"></span>
+        Built by traders, for traders &middot; Open source &middot; MIT &middot; 0% fees
+      </div>
+
+      <div class="hero-grid enter">
+        <div class="hero-left">
+          <div class="eyebrow">
+            <span class="dot dot--rh"></span>
+            Robinhood Chain &amp; Solana
+          </div>
+          <h1>
+            Stop paying Axiom<br>
+            &amp; gmgn for their<br>
+            <span class="accent">marketing.</span>
+          </h1>
+          <p class="hero-copy">
+            A free, open-source terminal that overlays gmgn &amp; Axiom — same trades, <strong style="color:var(--fg)">0% platform fees</strong>, keys on your device. Bring any RPC, free or paid. Keep 100% of what's yours.
+          </p>
+          <div class="hero-tags">
+            <span class="tag">0% platform fees</span>
+            <span class="tag">Built by traders</span>
+            <span class="tag">Bring your own RPC</span>
+            <span class="tag">Keys on your device</span>
+            <span class="tag">MIT license</span>
+          </div>
+          <div class="btn-row">
+            <a class="btn-command" href="#install">Install in 2 minutes</a>
+            <a class="btn-ghost" href="https://github.com/TaroHarado/Trench" target="_blank" rel="noreferrer">View source</a>
+          </div>
+        </div>
+
+        <div class="hero-terminal">
+          <div class="panel-bar">
+            <span style="flex:1">Trench</span>
+            <span style="color:var(--rh);font-size:10px">RH CHAIN</span>
+          </div>
+          <div class="terminal-body">
+            <div class="t-section">
+              <div class="t-label-row">
+                <span class="t-label buy">Buy</span>
+                <span class="t-bal">12.48 SOL &middot; 250 USDG</span>
+              </div>
+              <div class="t-grid">
+                <div class="t-btn">0.1</div>
+                <div class="t-btn active-buy">0.5</div>
+                <div class="t-btn">2</div>
+                <div class="t-btn">5</div>
+              </div>
+            </div>
+            <div class="t-divider"></div>
+            <div class="t-section">
+              <div class="t-label-row">
+                <span class="t-label sell">Sell</span>
+                <span class="t-bal">1,240 ROBIN &middot; <span style="color:var(--rh)">+0.42 SOL</span></span>
+              </div>
+              <div class="t-grid">
+                <div class="t-btn">10%</div>
+                <div class="t-btn active-sell">30%</div>
+                <div class="t-btn">70%</div>
+                <div class="t-btn">100%</div>
+              </div>
+            </div>
+            <div class="t-divider"></div>
+            <div class="kv"><span class="kv-key">Slippage</span><span class="kv-val">30%</span></div>
+            <div class="kv"><span class="kv-key">Priority fee</span><span class="kv-val green">0.001 SOL</span></div>
+            <div class="kv"><span class="kv-key">RPC</span><span class="kv-val green">Public</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── COMPARE / FEES ── -->
+  <section id="compare">
+    <div class="wrap">
+      <div class="section-header enter">
+        <div class="kicker">The math</div>
+        <h2>Their fees add up.<br>Ours are zero.</h2>
+        <p class="section-copy">Hosted terminals skim a cut of every trade to pay for their ads and referral wars. You fund their marketing on the way in and on the way out. Trench takes nothing.</p>
+      </div>
+      <div class="panel-grid3 enter" style="grid-template-columns:1fr 1fr">
+        <div class="panel">
+          <div class="panel-bar panel-bar--ghost">Hosted terminals</div>
+          <div class="panel-body">
+            <div class="kv"><span class="kv-key">Platform fee</span><span class="kv-val" style="color:#ff6b6b">~1% per trade</span></div>
+            <div class="kv"><span class="kv-key">Priority routing</span><span class="kv-val" style="color:var(--muted-fg)">Sold as a premium plan</span></div>
+            <div class="kv"><span class="kv-key">Your keys</span><span class="kv-val" style="color:var(--muted-fg)">Custodial / hosted</span></div>
+            <div class="kv"><span class="kv-key">Code</span><span class="kv-val" style="color:var(--muted-fg)">Closed, unauditable</span></div>
+            <div class="kv"><span class="kv-key">Where fees go</span><span class="kv-val" style="color:var(--muted-fg)">Their marketing budget</span></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-bar">Trench</div>
+          <div class="panel-body">
+            <div class="kv"><span class="kv-key">Platform fee</span><span class="kv-val green">0% — always</span></div>
+            <div class="kv"><span class="kv-key">Priority routing</span><span class="kv-val green">Bring any RPC, free or paid</span></div>
+            <div class="kv"><span class="kv-key">Your keys</span><span class="kv-val green">Encrypted on your device</span></div>
+            <div class="kv"><span class="kv-key">Code</span><span class="kv-val green">Open source, MIT</span></div>
+            <div class="kv"><span class="kv-key">Where fees go</span><span class="kv-val green">Nowhere — you keep it</span></div>
+          </div>
+        </div>
+      </div>
+      <p class="section-copy enter" style="margin-top:20px;font-size:13px">Speed comes from your RPC, not a paywall. Point Trench at a free public endpoint or your own paid key (Helius, Shyft, QuickNode) — either way the fee is the same: nothing.</p>
+    </div>
+  </section>
+
+  <!-- ── WHAT IT IS ── -->
+  <section id="what">
+    <div class="wrap">
+      <div class="section-header enter">
+        <div class="kicker">What it is</div>
+        <h2>Three tools, one extension.</h2>
+        <p class="section-copy">Everything runs locally in your browser. No accounts, no cloud, no custody — just on-chain calls through public RPC endpoints.</p>
+      </div>
+      <div class="panel-grid3 enter">
+        <div class="panel">
+          <div class="panel-bar">01 &mdash; Floating overlay</div>
+          <div class="panel-body">
+            <p style="font-size:14px;color:var(--muted-fg);line-height:1.6">A draggable buy/sell terminal injected directly over any token page on gmgn.ai or Axiom. Presets, hotkeys, slippage, live position — always one keystroke away.</p>
+            <div style="margin-top:14px">
+              <div class="kv"><span class="kv-key">Platforms</span><span class="kv-val">gmgn.ai, Axiom</span></div>
+              <div class="kv"><span class="kv-key">Chains</span><span class="kv-val green">Robinhood Chain, Solana</span></div>
+              <div class="kv"><span class="kv-key">Hotkeys</span><span class="kv-val">1-4 buy, Q-W-E-R sell</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-bar">02 &mdash; Quick-buy on cards</div>
+          <div class="panel-body">
+            <p style="font-size:14px;color:var(--muted-fg);line-height:1.6">A BUY button injected onto every new token card in the gmgn feed. Snipe straight from the list without opening the token page. Address is read at click time — handles DOM recycling.</p>
+            <div style="margin-top:14px">
+              <div class="kv"><span class="kv-key">Target</span><span class="kv-val">gmgn.ai feed</span></div>
+              <div class="kv"><span class="kv-key">Amount</span><span class="kv-val green">From preset</span></div>
+              <div class="kv"><span class="kv-key">Detection</span><span class="kv-val">MutationObserver</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-bar">03 &mdash; Trenches scanner</div>
+          <div class="panel-body">
+            <p style="font-size:14px;color:var(--muted-fg);line-height:1.6">A standalone tab streaming brand-new pools from Robinhood Chain in real time — NEW / Almost bonded / Migrated lanes, one-tap buys, live price and bonding progress.</p>
+            <div style="margin-top:14px">
+              <div class="kv"><span class="kv-key">Chain</span><span class="kv-val green">Robinhood Chain</span></div>
+              <div class="kv"><span class="kv-key">Lanes</span><span class="kv-val">New / Bonded / Migrated</span></div>
+              <div class="kv"><span class="kv-key">DEX</span><span class="kv-val">Uniswap V3</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── FEATURES ── -->
+  <section id="features" style="padding-top:0">
+    <div class="wrap">
+      <div class="section-header enter">
+        <div class="kicker">Features</div>
+        <h2>Built for speed.<br>Wired for safety.</h2>
+      </div>
+      <div class="panel-grid2 enter">
+        <div class="panel">
+          <div class="panel-bar panel-bar--ghost">Solana + Robinhood Chain</div>
+          <div class="panel-body"><p style="font-size:14px;color:var(--muted-fg);line-height:1.6">Solana swaps route through Jupiter and Pump.fun. Robinhood Chain trades execute via Uniswap V3 with automatic pool selection and slippage guard.</p></div>
+        </div>
+        <div class="panel">
+          <div class="panel-bar panel-bar--ghost">Local signing</div>
+          <div class="panel-body"><p style="font-size:14px;color:var(--muted-fg);line-height:1.6">Use your browser wallet, or import a hot key — it is device-encrypted and decrypted only within the active extension session. Nothing is sent anywhere.</p></div>
+        </div>
+        <div class="panel">
+          <div class="panel-bar panel-bar--ghost">Public RPC by default</div>
+          <div class="panel-body"><p style="font-size:14px;color:var(--muted-fg);line-height:1.6">Ships pre-configured with PublicNode and dRPC — free, reliable, no keys required. Swap in Helius or Shyft any time for extra throughput.</p></div>
+        </div>
+        <div class="panel">
+          <div class="panel-bar panel-bar--ghost">Presets &amp; hotkeys</div>
+          <div class="panel-body"><p style="font-size:14px;color:var(--muted-fg);line-height:1.6">Scalp / Standard / Ape strategies with dedicated slippage, priority fee and buy amounts. Keyboard shortcuts map to every buy/sell button.</p></div>
+        </div>
+        <div class="panel">
+          <div class="panel-bar panel-bar--ghost">Local PnL &amp; history</div>
+          <div class="panel-body"><p style="font-size:14px;color:var(--muted-fg);line-height:1.6">Cost-basis and realized PnL are rebuilt from on-chain history and stored in Chrome local storage. Your trade log never leaves the browser.</p></div>
+        </div>
+        <div class="panel">
+          <div class="panel-bar panel-bar--ghost">No custody · no middleman</div>
+          <div class="panel-body"><p style="font-size:14px;color:var(--muted-fg);line-height:1.6">Trench holds no funds and takes 0% on every trade — no default fee, no optional fee, no treasury cut. Your transactions go straight to your own RPC.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── INSTALL ── -->
+  <section id="install">
+    <div class="wrap">
+      <div class="section-header enter">
+        <div class="kicker">Install</div>
+        <h2>Running in about<br>two minutes.</h2>
+        <p class="section-copy">Loaded as an unpacked extension directly into Chromium — Chrome, Brave, Edge. No store approval, no gatekeeper.</p>
+      </div>
+      <div class="steps enter">
+        <div class="step">
+          <div class="step-n">01</div>
+          <div class="step-body">
+            <h3>Clone &amp; build</h3>
+            <p>Requires Node.js 18+. Clone the repository and build the <code style="font-family:var(--font-mono);color:var(--rh)">dist/</code> folder.</p>
+            <pre class="code"><span class="c"># clone the repo</span>
+git clone https://github.com/TaroHarado/Trench.git
+cd trench
+npm install
+npm run build</pre>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-n">02</div>
+          <div class="step-body">
+            <h3>Load into your browser</h3>
+            <p>Open <code style="font-family:var(--font-mono);color:var(--rh)">chrome://extensions</code>, enable <strong style="color:var(--fg)">Developer mode</strong> in the top-right corner, click <strong style="color:var(--fg)">Load unpacked</strong>, and select the generated <code style="font-family:var(--font-mono);color:var(--rh)">dist/</code> folder.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-n">03</div>
+          <div class="step-body">
+            <h3>Open a market</h3>
+            <p>Navigate to <code style="font-family:var(--font-mono);color:var(--rh)">gmgn.ai/?chain=robinhood</code> or <code style="font-family:var(--font-mono);color:var(--rh)">axiom.trade/pulse</code>. The overlay mounts automatically, and BUY buttons appear on every card. Pin the extension icon for quick popup access.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-n">04</div>
+          <div class="step-body">
+            <h3>Add a wallet (optional)</h3>
+            <p>Browse freely with no keys. To trade, connect your browser wallet — or import a hot private key in <strong style="color:var(--fg)">Options</strong>. It is encrypted on your device and never transmitted.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── WHY FREE ── -->
+  <section id="why-free">
+    <div class="wrap">
+      <div class="section-header enter">
+        <div class="kicker">Why free</div>
+        <h2>Transparency<br>is the product.</h2>
+        <p class="section-copy">No company behind a paywall. No subscription, no custody, no cut. Open source under MIT — fork it, audit it, own it.</p>
+      </div>
+      <div class="counter-grid enter" style="margin-bottom:1px">
+        <div class="counter-box">
+          <b>$0</b>
+          <span>Cost, forever</span>
+        </div>
+        <div class="counter-box">
+          <b>0%</b>
+          <span>Platform fee, always</span>
+        </div>
+        <div class="counter-box">
+          <b>100%</b>
+          <span>Open source</span>
+        </div>
+        <div class="counter-box">
+          <b>MIT</b>
+          <span>License</span>
+        </div>
+      </div>
+      <div class="panel enter">
+        <div class="panel-bar panel-bar--ghost">Why open source</div>
+        <div class="panel-body">
+          <div class="kv"><span class="kv-key">Auditable</span><span class="kv-val" style="color:var(--muted-fg)">Every line of code is public. No hidden logic, no obscured fee routes.</span></div>
+          <div class="kv"><span class="kv-key">Forkable</span><span class="kv-val" style="color:var(--muted-fg)">MIT license. Use it, modify it, redistribute it without restriction.</span></div>
+          <div class="kv"><span class="kv-key">Self-hostable</span><span class="kv-val" style="color:var(--muted-fg)">Load from your own build. Depends on no external service to function.</span></div>
+          <div class="kv"><span class="kv-key">No accounts</span><span class="kv-val green">Works without signup, login, or any network request to our servers.</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── FAQ ── -->
+  <section id="faq">
+    <div class="wrap">
+      <div class="section-header enter">
+        <div class="kicker">FAQ</div>
+        <h2>Good questions.</h2>
+      </div>
+      <div class="faq enter">
+        <details open>
+          <summary>Is it really free? <span class="sum-icon">+</span></summary>
+          <p>Yes. The extension is MIT-licensed and takes 0% on every trade — there is no default fee and no optional fee. It runs on free public RPC endpoints, so there is nothing to pay and nothing to sign up for.</p>
+        </details>
+        <details>
+          <summary>Where are my private keys stored? <span class="sum-icon">+</span></summary>
+          <p>On your device only. Hot keys are encrypted with a device key and decrypted only for the active extension session. They are never sent to any server. You can also use an existing browser wallet and skip key import entirely.</p>
+        </details>
+        <details>
+          <summary>Which chains and DEXes are supported? <span class="sum-icon">+</span></summary>
+          <p>Solana via Jupiter and Pump.fun, and Robinhood Chain via Uniswap V3 with automatic pool and route discovery. The overlay works on gmgn.ai and Axiom.</p>
+        </details>
+        <details>
+          <summary>Do I need a paid RPC? <span class="sum-icon">+</span></summary>
+          <p>No. The extension ships with PublicNode and dRPC configured by default — both are free and require no API key. You can paste a Helius, Shyft, or QuickNode endpoint in Options at any time for lower latency.</p>
+        </details>
+        <details>
+          <summary>Does it work on other sites besides gmgn.ai? <span class="sum-icon">+</span></summary>
+          <p>Yes. The floating overlay also mounts on axiom.trade. Additional platforms can be added by updating the content script match patterns in the extension manifest.</p>
+        </details>
+        <details>
+          <summary>Is this financial advice? <span class="sum-icon">+</span></summary>
+          <p>No. Trench is a tool. Trading new tokens is high-risk and you can lose everything. Always verify what you sign. You are fully responsible for your own trades.</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── FINAL CTA ── -->
+  <section style="padding-top:0;padding-bottom:56px">
+    <div class="wrap">
+      <div class="cta-panel enter">
+        <div class="panel-bar" style="background:var(--rh);color:var(--rh-on)">Get started</div>
+        <div class="cta-inner">
+          <h2>Own your terminal.</h2>
+          <p class="section-copy">Free, open source, running on public rails.<br>Clone it, load it, trade from the chart.</p>
+          <div class="btn-row" style="justify-content:center">
+            <a class="btn-command" href="#install">Install now</a>
+            <a class="btn-ghost" href="https://github.com/TaroHarado/Trench" target="_blank" rel="noreferrer">View on GitHub</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <span class="foot-brand">Trench &middot; MIT License</span>
+      <div class="foot-links">
+        <a href="#what">What</a>
+        <a href="#install">Install</a>
+        <a href="#faq">FAQ</a>
+        <a href="https://github.com/TaroHarado/Trench" target="_blank" rel="noreferrer">GitHub</a>
+      </div>
+    </div>
+    <p class="disclaimer">
+      Disclaimer: Trench is experimental open-source software provided "as is", without warranty of any kind. It is not affiliated with Robinhood, gmgn.ai, Axiom, Solana, Jupiter or Uniswap. Cryptocurrency trading carries substantial risk of loss. Use at your own risk. Never trade with funds you cannot afford to lose.
+    </p>
+  </div>
+</footer>
+
+<script>
+  const io = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (e.isIntersecting) { e.target.classList.add('enter'); io.unobserve(e.target); }
+    }
+  }, { threshold: 0.1 });
+  document.querySelectorAll('.enter').forEach(el => { el.classList.remove('enter'); io.observe(el); });
+
+  // re-apply enter class for initial visible elements
+  requestAnimationFrame(() => {
+    document.querySelectorAll('[data-enter]').forEach(el => io.observe(el));
+  });
+</script>
+</body>
+</html>

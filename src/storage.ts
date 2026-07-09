@@ -1,16 +1,15 @@
-import type { TradeSettings, WidgetPosition } from './types';
+import type { TradePreset, TradePresetState, TradeSettings, WidgetPosition } from './types';
 
 export const SETTINGS_KEY = 'trench.settings.v1';
-const LEGACY_SETTINGS_KEY = 'tradewiz.settings.v1';
+export const PRESETS_KEY = 'trench.presets.v1';
 const POSITION_KEY = 'trench.position.v1';
-const LEGACY_POSITION_KEY = 'tradewiz.position.v1';
 const COLLAPSED_KEY = 'trench.collapsed.v1';
-const LEGACY_COLLAPSED_KEY = 'tradewiz.collapsed.v1';
 export const PUBLIC_TEST_RPC_URL = 'https://api.mainnet-beta.solana.com';
+export const PUBLICNODE_RPC_URL = 'https://solana-rpc.publicnode.com';
+export const DRPC_RPC_URL = 'https://solana.drpc.org';
 export const HELIUS_RPC_TEMPLATE = 'https://mainnet.helius-rpc.com/?api-key=';
 export const SHYFT_RPC_TEMPLATE = 'https://rpc.shyft.to?api_key=';
 export const JITO_MAINNET_TRANSACTION_URL = 'https://mainnet.block-engine.jito.wtf/api/v1/transactions';
-export const TRENCH_RPC_URL = 'https://rpc.trench.trade/rpc';
 
 export const defaultSettings: TradeSettings = {
   buyAmounts: [0.0005, 0.5, 2, 5],
@@ -26,10 +25,7 @@ export const defaultSettings: TradeSettings = {
   protection: true,
   confirmation: false,
   hotkeys: true,
-  rpcMode: 'custom',
-  rpcUrl: PUBLIC_TEST_RPC_URL,
-  trenchRpcUrl: TRENCH_RPC_URL,
-  trenchFeeRecipient: '',
+  rpcUrl: PUBLICNODE_RPC_URL,
   signerMode: 'wallet',
   localWalletPublicKey: '',
   sendMode: 'rpc',
@@ -38,10 +34,47 @@ export const defaultSettings: TradeSettings = {
   executionMode: 'jupiter'
 };
 
+export const defaultTradePresets: TradePreset[] = [
+  {
+    id: 'scalp',
+    name: 'Scalp',
+    settings: {
+      ...defaultSettings,
+      buyAmounts: [0.0005, 0.1, 0.25, 0.5],
+      sellPercents: [25, 50, 75, 100],
+      selectedBuyAmount: 0.1,
+      selectedSellPercent: 50,
+      autoFeeLevel: 'fast'
+    },
+    updatedAt: 0
+  },
+  {
+    id: 'standard',
+    name: 'Standard',
+    settings: { ...defaultSettings },
+    updatedAt: 0
+  },
+  {
+    id: 'ape',
+    name: 'Ape',
+    settings: {
+      ...defaultSettings,
+      buyAmounts: [0.5, 1, 2, 5],
+      selectedBuyAmount: 1,
+      slippage: 45,
+      autoFeeLevel: 'turbo',
+      autoFeeMax: 0.01,
+      sendMode: 'jito',
+      jitoBundleOnly: true
+    },
+    updatedAt: 0
+  }
+];
+
 const fallbackPosition: WidgetPosition = { x: 24, y: 72 };
 
 export function loadSettings(): TradeSettings {
-  const raw = localStorage.getItem(SETTINGS_KEY) ?? localStorage.getItem(LEGACY_SETTINGS_KEY);
+  const raw = localStorage.getItem(SETTINGS_KEY);
   if (!raw) return defaultSettings;
 
   try {
@@ -56,8 +89,8 @@ export async function loadExtensionSettings(): Promise<TradeSettings> {
   const chromeStorage = getChromeStorage();
   if (!chromeStorage) return loadSettings();
 
-  const stored = await chromeStorage.get([SETTINGS_KEY, LEGACY_SETTINGS_KEY]);
-  const parsed = (stored[SETTINGS_KEY] ?? stored[LEGACY_SETTINGS_KEY]) as Partial<TradeSettings> | undefined;
+  const stored = await chromeStorage.get([SETTINGS_KEY]);
+  const parsed = stored[SETTINGS_KEY] as Partial<TradeSettings> | undefined;
   return normalizeSettings(parsed);
 }
 
@@ -78,8 +111,22 @@ export async function resetExtensionSettings() {
   return defaultSettings;
 }
 
+export async function loadExtensionPresets(): Promise<TradePresetState> {
+  const chromeStorage = getChromeStorage();
+  if (!chromeStorage) return loadPresetStateFromLocalStorage();
+
+  const stored = await chromeStorage.get([PRESETS_KEY]);
+  return normalizePresetState(stored[PRESETS_KEY]);
+}
+
+export async function saveExtensionPresets(state: TradePresetState) {
+  const normalized = normalizePresetState(state);
+  localStorage.setItem(PRESETS_KEY, JSON.stringify(normalized));
+  await getChromeStorage()?.set({ [PRESETS_KEY]: normalized });
+}
+
 export function loadPosition(): WidgetPosition {
-  const raw = localStorage.getItem(POSITION_KEY) ?? localStorage.getItem(LEGACY_POSITION_KEY);
+  const raw = localStorage.getItem(POSITION_KEY);
   if (!raw) return fallbackPosition;
 
   try {
@@ -98,7 +145,7 @@ export function savePosition(position: WidgetPosition) {
 }
 
 export function loadCollapsed(): boolean {
-  return (localStorage.getItem(COLLAPSED_KEY) ?? localStorage.getItem(LEGACY_COLLAPSED_KEY)) === 'true';
+  return localStorage.getItem(COLLAPSED_KEY) === 'true';
 }
 
 export function saveCollapsed(collapsed: boolean) {
@@ -119,10 +166,7 @@ function normalizeSettings(settings?: Partial<TradeSettings>): TradeSettings {
     autoFee: Boolean(merged.autoFee),
     autoFeeLevel: ['normal', 'fast', 'turbo'].includes(merged.autoFeeLevel) ? merged.autoFeeLevel : defaultSettings.autoFeeLevel,
     autoFeeMax: clampNumber(merged.autoFeeMax, 0.0001, 0.1, defaultSettings.autoFeeMax),
-    rpcMode: ['custom', 'trench'].includes(merged.rpcMode) ? merged.rpcMode : defaultSettings.rpcMode,
-    rpcUrl: typeof merged.rpcUrl === 'string' && merged.rpcUrl.trim() ? merged.rpcUrl.trim() : PUBLIC_TEST_RPC_URL,
-    trenchRpcUrl: typeof merged.trenchRpcUrl === 'string' && merged.trenchRpcUrl.trim() ? merged.trenchRpcUrl.trim() : TRENCH_RPC_URL,
-    trenchFeeRecipient: typeof merged.trenchFeeRecipient === 'string' ? merged.trenchFeeRecipient.trim() : '',
+    rpcUrl: typeof merged.rpcUrl === 'string' && merged.rpcUrl.trim() ? merged.rpcUrl.trim() : PUBLICNODE_RPC_URL,
     signerMode: ['wallet', 'local'].includes(merged.signerMode) ? merged.signerMode : defaultSettings.signerMode,
     localWalletPublicKey: typeof merged.localWalletPublicKey === 'string' ? merged.localWalletPublicKey : '',
     sendMode: ['rpc', 'jito'].includes(merged.sendMode) ? merged.sendMode : defaultSettings.sendMode,
@@ -132,12 +176,52 @@ function normalizeSettings(settings?: Partial<TradeSettings>): TradeSettings {
   };
 }
 
-export function getActiveRpcUrl(settings: TradeSettings) {
-  return settings.rpcMode === 'trench' ? settings.trenchRpcUrl : settings.rpcUrl;
+function loadPresetStateFromLocalStorage(): TradePresetState {
+  const raw = localStorage.getItem(PRESETS_KEY);
+  if (!raw) return normalizePresetState();
+
+  try {
+    return normalizePresetState(JSON.parse(raw));
+  } catch {
+    return normalizePresetState();
+  }
 }
 
-export function usesTrenchRouting(settings: TradeSettings) {
-  return settings.rpcMode === 'trench';
+function normalizePresetState(state?: unknown): TradePresetState {
+  const candidate = state as Partial<TradePresetState> | undefined;
+  const parsedPresets = Array.isArray(candidate?.presets)
+    ? candidate.presets.map(normalizePreset).filter((preset): preset is TradePreset => Boolean(preset))
+    : [];
+  const presets = parsedPresets.length ? parsedPresets : cloneDefaultPresets();
+  const requestedActive = typeof candidate?.activePresetId === 'string' ? candidate.activePresetId : '';
+  const activePresetId = presets.some((preset) => preset.id === requestedActive) ? requestedActive : presets[0].id;
+  return { activePresetId, presets };
+}
+
+function normalizePreset(preset: unknown): TradePreset | null {
+  const candidate = preset as Partial<TradePreset> | undefined;
+  if (!candidate || typeof candidate !== 'object') return null;
+  const id = typeof candidate.id === 'string' && candidate.id.trim() ? candidate.id.trim().slice(0, 48) : '';
+  if (!id) return null;
+  const name = typeof candidate.name === 'string' && candidate.name.trim() ? candidate.name.trim().slice(0, 24) : 'Preset';
+  const updatedAt = Number.isFinite(candidate.updatedAt) ? Number(candidate.updatedAt) : 0;
+  return {
+    id,
+    name,
+    settings: normalizeSettings(candidate.settings),
+    updatedAt
+  };
+}
+
+function cloneDefaultPresets(): TradePreset[] {
+  return defaultTradePresets.map((preset) => ({
+    ...preset,
+    settings: { ...preset.settings }
+  }));
+}
+
+export function getActiveRpcUrl(settings: TradeSettings) {
+  return settings.rpcUrl;
 }
 
 function normalizeNumberList(value: unknown, fallback: number[], maxLength: number) {

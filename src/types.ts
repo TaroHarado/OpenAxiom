@@ -21,10 +21,7 @@ export type TradeSettings = {
   protection: boolean;
   confirmation: boolean;
   hotkeys: boolean;
-  rpcMode: 'custom' | 'trench';
   rpcUrl: string;
-  trenchRpcUrl: string;
-  trenchFeeRecipient: string;
   signerMode: 'wallet' | 'local';
   localWalletPublicKey: string;
   sendMode: 'rpc' | 'jito';
@@ -33,10 +30,69 @@ export type TradeSettings = {
   executionMode: 'jupiter' | 'pump' | 'auto';
 };
 
+export type TradePreset = {
+  id: string;
+  name: string;
+  settings: TradeSettings;
+  updatedAt: number;
+};
+
+export type TradePresetState = {
+  activePresetId: string;
+  presets: TradePreset[];
+};
+
+export type SupportedChain = 'solana' | 'robinhood';
+
 export type TokenContext = {
   mint: string | null;
   symbol: string;
   source: 'axiom-url' | 'dom' | 'unknown';
+  chain?: SupportedChain;
+};
+
+export type EvmInputCurrency = 'USDG' | 'ETH';
+
+export type EvmTradeRequest = {
+  type: 'TRENCH_EVM_TRADE';
+  side: TradeSide;
+  tokenAddress: string;
+  amountUsdg: number;
+  slippageBps: number;
+  inputCurrency?: EvmInputCurrency;
+};
+
+export type EvmTradeResponse = {
+  ok: boolean;
+  hash?: string;
+  error?: string;
+};
+
+export type EvmPositionRequest = {
+  type: 'TRENCH_EVM_GET_POSITION';
+  wallet: string;
+  tokenAddress: string;
+};
+
+export type EvmPositionResponse = {
+  ok: boolean;
+  ethBalance?: string;
+  tokenBalance?: string;
+  error?: string;
+};
+
+export type EvmWalletRequest =
+  | { type: 'TRENCH_EVM_WALLET_IMPORT'; privateKey: string }
+  | { type: 'TRENCH_EVM_WALLET_STATUS' }
+  | { type: 'TRENCH_EVM_WALLET_LOCK' }
+  | { type: 'TRENCH_EVM_WALLET_FORGET' };
+
+export type EvmWalletResponse = {
+  ok: boolean;
+  hasWallet?: boolean;
+  unlocked?: boolean;
+  address?: string;
+  error?: string;
 };
 
 export type PositionState = {
@@ -117,6 +173,7 @@ export type PositionResponse = {
 
 export type HotWalletRequest =
   | { type: 'TRENCH_HOT_WALLET_STATUS' }
+  | { type: 'TRENCH_HOT_WALLET_REFRESH' }
   | { type: 'TRENCH_HOT_WALLET_IMPORT'; secretKey: string }
   | { type: 'TRENCH_HOT_WALLET_UNLOCK' }
   | { type: 'TRENCH_HOT_WALLET_LOCK' }
@@ -127,6 +184,8 @@ export type HotWalletResponse = {
   hasWallet?: boolean;
   unlocked?: boolean;
   publicKey?: string;
+  walletSol?: number;
+  balanceError?: string;
   error?: string;
 };
 

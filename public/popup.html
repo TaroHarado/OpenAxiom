@@ -5,144 +5,195 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Trench</title>
     <style>
-      :root { color-scheme: dark; }
+      :root {
+        color-scheme: dark;
+        --bg: #07080b;
+        --panel: #0c0d12;
+        --line: #1a1c27;
+        --line-soft: #12141d;
+        --text: #e9ecf2;
+        --muted: #7f8596;
+        --faint: #424755;
+        --green: #14f195;
+        --green-soft: #0f2419;
+        --red: #ff607a;
+      }
+
       * { box-sizing: border-box; margin: 0; padding: 0; }
 
       body {
-        width: 280px;
-        background: #0a0a0e;
-        color: #c0c0ce;
-        font: 11px/1.4 "Geist Mono", "JetBrains Mono", ui-monospace, "Cascadia Code", Menlo, monospace;
+        width: 300px;
+        background:
+          radial-gradient(circle at 14% 0%, rgba(20, 241, 149, 0.1), transparent 42%),
+          linear-gradient(180deg, #0a0b10 0%, #07080b 100%);
+        color: var(--muted);
+        font: 11px/1.5 "Geist Mono", "JetBrains Mono", ui-monospace, "Cascadia Code", Menlo, monospace;
         letter-spacing: -0.01em;
       }
 
-      .wrap { padding: 12px; display: grid; gap: 10px; }
+      .wrap { padding: 14px; display: grid; gap: 12px; }
 
       /* ── header ── */
       .head {
         display: flex;
         align-items: center;
-        gap: 8px;
-        padding-bottom: 10px;
-        border-bottom: 1px solid #1a1a22;
+        gap: 10px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--line-soft);
       }
       .logo {
-        width: 22px; height: 22px;
+        width: 30px; height: 30px;
         display: grid; place-items: center;
-        border-radius: 4px;
-        background: #14f195;
-        color: #020408;
-        font-size: 8px; font-weight: 900;
+        border-radius: 8px;
+        border: 1px solid rgba(20, 241, 149, 0.3);
+        background: linear-gradient(145deg, #10151a, #07110c);
+        color: var(--green);
+        font-size: 10px; font-weight: 900;
         letter-spacing: 0.04em;
+        box-shadow: 0 0 18px rgba(20, 241, 149, 0.12);
         flex-shrink: 0;
       }
-      .head-text { display: grid; gap: 1px; }
+      .head-text { display: grid; gap: 2px; }
       .head-title {
-        font-size: 11px; font-weight: 700;
-        color: #f4f4f7;
-        letter-spacing: 0.06em;
+        font-size: 13px; font-weight: 900;
+        color: var(--text);
+        letter-spacing: 0.05em;
         text-transform: uppercase;
       }
-      .head-sub { font-size: 9px; color: #3e3e4e; letter-spacing: 0.02em; }
+      .head-sub {
+        font-size: 9px; color: var(--faint);
+        letter-spacing: 0.08em; text-transform: uppercase;
+        font-weight: 800;
+      }
 
       /* ── status row ── */
       .status {
         display: flex;
         align-items: center;
-        gap: 6px;
-        padding: 6px 8px;
-        border: 1px solid #1a1a22;
-        border-radius: 4px;
-        background: #0d0d11;
+        gap: 7px;
+        padding: 8px 10px;
+        border: 1px solid rgba(20, 241, 149, 0.18);
+        border-radius: 10px;
+        background: rgba(15, 36, 25, 0.4);
         font-size: 10px;
-        color: #555565;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--green);
       }
       .dot {
-        width: 5px; height: 5px;
+        width: 6px; height: 6px;
         border-radius: 50%;
-        background: #14f195;
+        background: var(--green);
+        box-shadow: 0 0 6px rgba(20, 241, 149, 0.8);
         flex-shrink: 0;
       }
 
       /* ── action buttons ── */
-      .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+      .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
       button, a.btn {
-        height: 30px;
+        height: 34px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        border: 1px solid #1e1e26;
-        border-radius: 4px;
-        background: #111117;
-        color: #808090;
+        gap: 6px;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: var(--panel);
+        color: var(--muted);
         text-decoration: none;
-        font: 700 9px/1 "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
-        letter-spacing: 0.06em;
+        font: 800 9px/1 "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
+        letter-spacing: 0.07em;
         text-transform: uppercase;
         cursor: pointer;
-        transition: border-color 80ms, color 80ms;
+        transition: border-color 120ms ease, color 120ms ease, background 120ms ease, transform 120ms ease;
       }
-      button:hover, a.btn:hover { border-color: #2a2a35; color: #c0c0ce; }
+      button:hover, a.btn:hover { border-color: #2c3140; color: var(--text); transform: translateY(-1px); }
 
       .primary {
-        border-color: #18281e;
-        background: #0d1a12;
-        color: #14f195;
+        border-color: rgba(20, 241, 149, 0.32);
+        background: var(--green-soft);
+        color: var(--green);
       }
-      .primary:hover { border-color: rgba(20,241,149,0.45); color: #5fffc0; }
+      .primary:hover { border-color: rgba(20, 241, 149, 0.6); background: #123321; color: #7dffc6; }
 
       .wide { width: 100%; }
+
+      /* ── section label ── */
+      .section-label {
+        font-size: 9px;
+        font-weight: 900;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+        color: var(--faint);
+      }
 
       /* ── wallet box ── */
       .wallet-box {
         display: grid;
-        gap: 6px;
-        border: 1px solid #1a1a22;
-        border-radius: 4px;
-        background: #0a0a0e;
-        padding: 8px;
+        gap: 8px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: rgba(12, 13, 18, 0.7);
+        padding: 10px;
       }
       .wallet-box label {
         display: grid;
-        gap: 3px;
-        color: #3e3e4e;
+        gap: 4px;
+        color: var(--faint);
         font-size: 9px;
-        font-weight: 700;
-        letter-spacing: 0.06em;
+        font-weight: 900;
+        letter-spacing: 0.08em;
         text-transform: uppercase;
       }
-      .wallet-box textarea,
-      .wallet-box input {
+      .wallet-box textarea {
         width: 100%;
-        border: 1px solid #1e1e26;
-        border-radius: 4px;
-        background: #0d0d11;
-        color: #c0c0ce;
-        padding: 6px 7px;
-        font: 10px/1.35 "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
+        min-height: 62px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--bg);
+        color: var(--text);
+        padding: 8px 9px;
+        font: 10px/1.4 "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
         outline: none;
         letter-spacing: 0;
         resize: vertical;
+        transition: border-color 120ms ease, box-shadow 120ms ease;
       }
-      .wallet-box textarea { min-height: 60px; }
-      .wallet-box textarea:focus,
-      .wallet-box input:focus { border-color: #14f195; }
+      .wallet-box textarea:focus {
+        border-color: rgba(20, 241, 149, 0.55);
+        box-shadow: 0 0 0 3px rgba(20, 241, 149, 0.06);
+      }
 
       /* ── hint / result ── */
       .hint {
         font-size: 9px;
-        color: #3e3e4e;
-        line-height: 1.5;
-        letter-spacing: 0.02em;
+        color: var(--faint);
+        line-height: 1.55;
+        letter-spacing: 0.01em;
       }
       #result {
         font-size: 10px;
-        color: #14f195;
+        color: var(--green);
         min-height: 14px;
         word-break: break-all;
+        font-weight: 800;
       }
       #result:empty { display: none; }
+      #wallet-status {
+        padding: 10px;
+        border: 1px solid rgba(20, 241, 149, 0.18);
+        border-radius: 10px;
+        color: var(--green);
+        background: rgba(15, 36, 25, 0.4);
+        font-size: 10px;
+        line-height: 1.5;
+        word-break: break-all;
+        font-weight: 700;
+      }
+      #wallet-status:empty { display: none; }
+      .wallet-box.hidden { display: none; }
     </style>
   </head>
   <body>
@@ -151,34 +202,50 @@
         <div class="logo">TR</div>
         <div class="head-text">
           <div class="head-title">Trench</div>
-          <div class="head-sub">axiom overlay</div>
+          <div class="head-sub">solana · robinhood chain</div>
         </div>
       </div>
 
       <div class="status">
         <span class="dot"></span>
-        <span>Extension active</span>
+        <span>Extension active · public RPC</span>
+      </div>
+
+      <div class="section-label">Open terminals</div>
+      <div class="actions">
+        <a class="btn primary" href="https://gmgn.ai/?chain=robinhood" target="_blank">gmgn RH</a>
+        <a class="btn" href="https://axiom.trade/pulse" target="_blank">Axiom</a>
       </div>
 
       <div class="actions">
-        <a class="btn primary" href="https://axiom.trade/pulse" target="_blank">Axiom</a>
+        <button class="primary" id="trenches" type="button">⚡ Trenches</button>
         <button id="options" type="button">Options</button>
       </div>
 
-      <div class="wallet-box">
-        <label>Hot wallet key
+      <div class="section-label">Wallets</div>
+      <div class="hint">Import a burner key to trade. Fund <b>Solana</b> with SOL; fund <b>Robinhood Chain</b> with USDG + a little ETH for gas. Keys are encrypted on your device.</div>
+
+      <div id="wallet-status"></div>
+      <div class="wallet-box" id="wallet-box">
+        <label>Solana hot wallet key
           <textarea id="secret" placeholder="base58 · hex · bytes · JSON array"></textarea>
         </label>
-        <label>Password
-          <input id="password" type="password" placeholder="local encryption password" />
-        </label>
-        <button class="primary wide" id="import" type="button">Import hot wallet</button>
+        <button class="primary wide" id="import" type="button">Import Solana wallet</button>
       </div>
 
+      <div id="rh-status"></div>
+      <div class="wallet-box" id="rh-box">
+        <label>Robinhood Chain key (ERC-20)
+          <textarea id="rh-secret" placeholder="0x + 64 hex characters"></textarea>
+        </label>
+        <button class="primary wide" id="rh-import" type="button">Import Robinhood wallet</button>
+      </div>
+
+      <button class="wide" id="manage" type="button">Manage wallets &amp; balances</button>
       <button class="wide" id="force" type="button">Force panel on this tab</button>
 
       <div id="result"></div>
-      <div class="hint">Missing panel → DevTools Console → [Trench] content script mounted</div>
+      <div class="hint">No panel? Open DevTools console and look for <b>[Trench] content script mounted</b>. Everything runs on free public RPC — no keys required to browse.</div>
     </div>
     <script src="popup.js"></script>
   </body>

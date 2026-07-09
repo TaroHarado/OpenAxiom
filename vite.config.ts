@@ -8,9 +8,9 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       input: {
-        background: 'src/background.ts',
         injected: 'src/injected.ts',
-        options: 'options.html'
+        options: 'options.html',
+        trenches: 'trenches.html',
       },
       output: {
         entryFileNames: '[name].js',

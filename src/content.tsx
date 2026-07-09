@@ -1,20 +1,23 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  Calculator,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Coins,
   Edit3,
   ExternalLink,
-  History,
   Loader2,
+  Percent,
   Settings,
+  Shield,
+  ShieldOff,
   Wallet,
   X,
   Zap
 } from 'lucide-react';
 import { parseAxiomMintFromUrl, readAxiomTokenContext } from './axiom';
+import { isGmgnRobinhood, readGmgnTokenContext } from './gmgn';
 import {
   defaultSettings,
   loadCollapsed,
@@ -25,7 +28,7 @@ import {
   savePosition,
   saveSettings
 } from './storage';
-import type { PositionResponse, PositionState, ToastKind, TokenContext, TradeOrder, TradeResponse, TradeSettings, TradeSide } from './types';
+import type { EvmTradeResponse, EvmWalletResponse, PositionResponse, PositionState, ToastKind, TokenContext, TradeOrder, TradeResponse, TradeSettings, TradeSide } from './types';
 import type { WalletBridgeRequest, WalletBridgeResponse } from './types';
 import styles from './styles.css?inline';
 
@@ -43,8 +46,15 @@ declare global {
 const ROOT_ID = 'trench-shadow-root';
 const PULSE_STYLE_ID = 'trench-pulse-style';
 const PULSE_BUTTON_CLASS = 'trench-pulse-buy';
+const GMGN_STYLE_ID = 'trench-gmgn-style';
+const GMGN_BUTTON_CLASS = 'trench-gmgn-buy';
+const GMGN_CARD_FLAG = 'data-trench-gmgn';
+const EVM_ADDRESS_PATTERN = /0x[0-9a-fA-F]{40}/;
 const PNL_LEDGER_KEY = 'trench.pnl.v1';
+const EVM_PNL_LEDGER_KEY = 'trench.evmPnl.v1';
 const TRADE_HISTORY_KEY = 'trench.tradeHistory.v1';
+const RH_RPC_URL = 'https://rpc.mainnet.chain.robinhood.com';
+const RH_USDG_ADDRESS = '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168';
 
 type PnlLedger = {
   rawTokenAmount: string;
@@ -53,11 +63,21 @@ type PnlLedger = {
   updatedAt: number;
 };
 
+type EvmPnlLedger = {
+  rawTokenAmount: string;
+  costBasisUsdg: number;
+  realizedPnlUsdg: number;
+  updatedAt: number;
+};
+
+type EvmBalancePair = { token: bigint; usdg: bigint };
+
 function mount() {
   if (document.getElementById(ROOT_ID)) return;
   console.info('[Trench] content script mounted', window.location.href);
   injectWalletBridge();
   initPulseQuickBuy();
+  initGmgnQuickBuy();
 
   const host = document.createElement('div');
   host.id = ROOT_ID;
@@ -80,14 +100,20 @@ function TrenchOverlay() {
   const [position, setPosition] = useState(() => clampPosition(loadPosition()));
   const [collapsed, setCollapsed] = useState(() => loadCollapsed());
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [editAmounts, setEditAmounts] = useState(false);
   const [ordersOpen, setOrdersOpen] = useState(true);
-  const [token, setToken] = useState<TokenContext>(() => readAxiomTokenContext());
+  const [token, setToken] = useState<TokenContext>(() => isGmgnRobinhood() ? readGmgnTokenContext() : readAxiomTokenContext());
   const [orders, setOrders] = useState<TradeOrder[]>(() => loadTradeHistory());
   const [pendingSide, setPendingSide] = useState<TradeSide | null>(null);
   const [confirmPending, setConfirmPending] = useState<{ side: TradeSide; amount: number } | null>(null);
   const [wallet, setWallet] = useState<string | null>(null);
-  const [positionState, setPositionState] = useState<PositionState>(() => emptyPosition(readAxiomTokenContext().symbol));
+  const [evmWallet, setEvmWallet] = useState<{ hasWallet: boolean; unlocked: boolean; address?: string }>({ hasWallet: false, unlocked: false });
+  const [evmEthBalance, setEvmEthBalance] = useState<number>(0);
+  const [evmUsdgBalance, setEvmUsdgBalance] = useState<number>(0);
+  const [positionState, setPositionState] = useState<PositionState>(() => emptyPosition((isGmgnRobinhood() ? readGmgnTokenContext() : readAxiomTokenContext()).symbol));
   const [pnlLedger, setPnlLedger] = useState<PnlLedger | null>(null);
+  const [evmPnl, setEvmPnl] = useState<EvmPnlLedger | null>(null);
+  const [evmTokenAmount, setEvmTokenAmount] = useState(0);
   const [positionLoading, setPositionLoading] = useState(false);
   const [positionError, setPositionError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ kind: ToastKind; text: string; signature?: string } | null>(null);
@@ -102,6 +128,49 @@ function TrenchOverlay() {
       setSettingsState(loaded);
       setSettingsReady(true);
     });
+  }, []);
+
+  useEffect(() => {
+    const refreshEvmWallet = () => {
+      chromeMessageEvm<{ ok: boolean; hasWallet: boolean; unlocked: boolean; address?: string }>({ type: 'TRENCH_EVM_WALLET_STATUS' })
+        .then((r) => {
+          setEvmWallet({ hasWallet: r.hasWallet, unlocked: r.unlocked, address: r.address });
+          if (r.address) refreshEvmBalances(r.address);
+        })
+        .catch(() => {});
+    };
+    const refreshEvmBalances = (address: string) => {
+      const RH_RPC = 'https://rpc.mainnet.chain.robinhood.com';
+      const USDG = '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168';
+      // ETH balance
+      fetch(RH_RPC, { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_getBalance', params: [address, 'latest'], id: 1 }) })
+        .then(r => r.json()).then((d: { result?: string }) => {
+          if (d.result) setEvmEthBalance(Number(BigInt(d.result)) / 1e18);
+        }).catch(() => {});
+      // USDG balance (balanceOf)
+      const data = '0x70a08231' + address.slice(2).toLowerCase().padStart(64, '0');
+      fetch(RH_RPC, { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_call', params: [{ to: USDG, data }, 'latest'], id: 2 }) })
+        .then(r => r.json()).then((d: { result?: string }) => {
+          if (d.result && d.result !== '0x') setEvmUsdgBalance(Number(BigInt(d.result)) / 1e6);
+        }).catch(() => {});
+    };
+    refreshEvmWallet();
+    window.addEventListener('focus', refreshEvmWallet);
+    return () => window.removeEventListener('focus', refreshEvmWallet);
+  }, []);
+
+  useEffect(() => {
+    const reloadSettings = () => {
+      void loadExtensionSettings().then(setSettingsState);
+    };
+    window.addEventListener('focus', reloadSettings);
+    window.addEventListener('pageshow', reloadSettings);
+    return () => {
+      window.removeEventListener('focus', reloadSettings);
+      window.removeEventListener('pageshow', reloadSettings);
+    };
   }, []);
 
   useEffect(() => {
@@ -136,16 +205,39 @@ function TrenchOverlay() {
     };
 
     void refresh();
+    const refreshVisible = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    window.addEventListener('focus', refreshVisible);
+    window.addEventListener('pageshow', refreshVisible);
+    document.addEventListener('visibilitychange', refreshVisible);
     const interval = window.setInterval(() => void refresh(), 12_000);
     return () => {
       cancelled = true;
+      window.removeEventListener('focus', refreshVisible);
+      window.removeEventListener('pageshow', refreshVisible);
+      document.removeEventListener('visibilitychange', refreshVisible);
       window.clearInterval(interval);
     };
-  }, [displayedWallet, pnlLedger?.costBasisSol, pnlLedger?.realizedPnlSol, settingsReady, settingsState.rpcMode, settingsState.rpcUrl, settingsState.trenchRpcUrl, token.mint, token.symbol]);
+  }, [displayedWallet, pnlLedger?.costBasisSol, pnlLedger?.realizedPnlSol, settingsReady, settingsState.rpcUrl, token.mint, token.symbol]);
 
   useEffect(() => {
     setPnlLedger(displayedWallet && token.mint ? loadPnlLedger(displayedWallet, token.mint) : null);
   }, [displayedWallet, token.mint]);
+
+  useEffect(() => {
+    if (token.chain !== 'robinhood' || !evmWallet.address || !token.mint) {
+      setEvmPnl(null);
+      setEvmTokenAmount(0);
+      return;
+    }
+    setEvmPnl(loadEvmPnlLedger(evmWallet.address, token.mint));
+    let cancelled = false;
+    void fetchEvmBalancePair(evmWallet.address, token.mint)
+      .then((pair) => { if (!cancelled) setEvmTokenAmount(Number(pair.token) / 1e18); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [token.chain, token.mint, evmWallet.address]);
 
   useEffect(() => {
     if (!settingsReady) return;
@@ -161,7 +253,18 @@ function TrenchOverlay() {
   }, [collapsed]);
 
   useEffect(() => {
-    const refresh = () => setToken(readAxiomTokenContext());
+    const forceOpen = () => {
+      setCollapsed(false);
+      setPosition(clampPosition({ x: 24, y: 72 }));
+      setActive(true);
+    };
+
+    document.addEventListener('trench:force-open', forceOpen);
+    return () => document.removeEventListener('trench:force-open', forceOpen);
+  }, []);
+
+  useEffect(() => {
+    const refresh = () => setToken(isGmgnRobinhood() ? readGmgnTokenContext() : readAxiomTokenContext());
     refresh();
 
     const observer = new MutationObserver(refresh);
@@ -249,6 +352,10 @@ function TrenchOverlay() {
     setSettingsState((current) => ({ ...current, ...patch }));
   }
 
+  function toggleEditAmounts() {
+    setEditAmounts((v) => !v);
+  }
+
   async function executeTrade(side: TradeSide, amount: number) {
     if (pendingSide) return;
     if (settingsState.confirmation) {
@@ -265,22 +372,41 @@ function TrenchOverlay() {
     setToast({ kind: 'info', text: side === 'buy' ? 'Buying...' : 'Selling...' });
 
     try {
-      const result = await runTrade(side, amount, token.mint, settingsState, wallet);
-      setWallet(result.publicKey);
-
-      setFlash('success');
-      setToast({ kind: 'success', text: side === 'buy' ? 'Buy filled' : 'Sell filled', signature: result.response.signature });
-      addTradeHistory(setOrders, {
-        side,
-        mint: token.mint,
-        wallet: result.publicKey,
-        route: result.prepared.route,
-        signature: result.response.signature,
-        summary: result.prepared.quoteSummary,
-        size: formatTradeValue(side, amount),
-        status: 'Sent'
-      });
-      if (token.mint && result.before?.ok) void refreshPnlAfterTrade(result.publicKey, token.mint, side, result.before, settingsState, setPnlLedger, setPositionState);
+      if (token.chain === 'robinhood') {
+        if (!evmWallet.hasWallet) throw new Error('Import EVM wallet in Settings first');
+        if (!evmWallet.unlocked) throw new Error('EVM wallet locked — re-open Settings to unlock');
+        const rhAddress = evmWallet.address;
+        const before = rhAddress && token.mint ? await fetchEvmBalancePair(rhAddress, token.mint).catch(() => null) : null;
+        await runEvmTrade(side, amount, token.mint, settingsState, side === 'buy' ? (evmUsdgBalance >= amount ? 'USDG' : 'ETH') : 'USDG');
+        setFlash('success');
+        setToast({ kind: 'success', text: side === 'buy' ? 'Buy filled' : 'Sell filled' });
+        addTradeHistory(setOrders, {
+          side,
+          mint: token.mint,
+          wallet: rhAddress ?? '',
+          size: formatTradeValue(side, amount),
+          status: 'Sent'
+        });
+        if (rhAddress && token.mint && before) {
+          void refreshEvmPnlAfterTrade(rhAddress, token.mint, side, before, setEvmPnl, setEvmTokenAmount);
+        }
+      } else {
+        const result = await runTrade(side, amount, token.mint, settingsState, wallet);
+        setWallet(result.publicKey);
+        setFlash('success');
+        setToast({ kind: 'success', text: side === 'buy' ? 'Buy filled' : 'Sell filled', signature: result.response.signature });
+        addTradeHistory(setOrders, {
+          side,
+          mint: token.mint,
+          wallet: result.publicKey,
+          route: result.prepared.route,
+          signature: result.response.signature,
+          summary: result.prepared.quoteSummary,
+          size: formatTradeValue(side, amount),
+          status: 'Sent'
+        });
+        if (token.mint && result.before?.ok) void refreshPnlAfterTrade(result.publicKey, token.mint, side, result.before, settingsState, setPnlLedger, setPositionState);
+      }
     } catch (error) {
       const publicKey = settingsState.signerMode === 'local' ? settingsState.localWalletPublicKey : wallet ?? '';
       addTradeHistory(setOrders, {
@@ -323,25 +449,21 @@ function TrenchOverlay() {
         <div className="tw-brand">
           <div className="tw-logo">TR</div>
           <div className="tw-title-wrap">
-            <div className="tw-title">Trench</div>
-            <div className="tw-mint" title={token.mint ?? 'Mint not found'}>
-              {token.mint ? `${shortMint(token.mint)} / ${token.source === 'axiom-url' ? 'URL' : token.source === 'dom' ? 'DOM' : 'NA'}` : 'No mint'}
+            <div className="tw-title">{token.symbol && token.symbol !== 'TOKEN' ? token.symbol : 'Trench'}</div>
+            <div className="tw-mint" title={token.mint ?? 'Token not detected'}>
+              {token.mint ? shortMint(token.mint) : '—'}
             </div>
           </div>
-          <button className="tw-preset tw-no-drag" type="button">
-            P3 <ChevronDown size={12} />
-          </button>
         </div>
-
         <nav className="tw-header-actions tw-no-drag" aria-label="Trench actions">
-          {isPublicRpc(settingsState) ? <span className="tw-rpc-warn" title="Public RPC — rate limited, consider adding a private key in Options">PUB</span> : null}
-          <IconButton label="Orders" active={ordersOpen} onClick={() => setOrdersOpen((v) => !v)}><History size={14} /></IconButton>
+          {isPublicRpc(settingsState) ? <span className="tw-rpc-warn" title="Public RPC — rate limited">PUB</span> : null}
           <IconButton label={walletButtonLabel(settingsState, wallet)} onClick={() => connectBrowserWallet(settingsState, setWallet, setToast)}>
             <Wallet size={14} />
           </IconButton>
-          <IconButton label="Calculator"><Calculator size={14} /></IconButton>
-          <IconButton label="Edit preset"><Edit3 size={14} /></IconButton>
-          <IconButton label="Settings" active={settingsOpen} onClick={() => setSettingsOpen((value) => !value)}>
+          <IconButton label={editAmounts ? 'Done editing' : 'Edit amounts'} active={editAmounts} onClick={toggleEditAmounts}>
+            <Edit3 size={14} />
+          </IconButton>
+          <IconButton label="Settings" active={settingsOpen} onClick={() => setSettingsOpen((v) => !v)}>
             <Settings size={14} />
           </IconButton>
           <IconButton label="Collapse" onClick={() => setCollapsed(true)}><ChevronUp size={14} /></IconButton>
@@ -349,10 +471,24 @@ function TrenchOverlay() {
       </header>
 
       <main className="tw-body">
+
         {settingsOpen ? (
           <SettingsPanel
             settings={settingsState}
             onChange={patchSettings}
+            evmWallet={evmWallet}
+            onEvmWalletImport={async (pk: string) => {
+              const r = await chromeMessageEvm<{ ok: boolean; address?: string; error?: string }>({ type: 'TRENCH_EVM_WALLET_IMPORT', privateKey: pk });
+              if (r.ok) {
+                setEvmWallet({ hasWallet: true, unlocked: true, address: r.address });
+                void loadExtensionSettings().then(setSettingsState);
+              }
+              return r;
+            }}
+            onEvmWalletForget={async () => {
+              await chromeMessageEvm<{ ok: boolean }>({ type: 'TRENCH_EVM_WALLET_FORGET' });
+              setEvmWallet({ hasWallet: false, unlocked: false, address: undefined });
+            }}
             onClearHistory={() => {
               localStorage.removeItem(TRADE_HISTORY_KEY);
               setOrders([]);
@@ -369,13 +505,25 @@ function TrenchOverlay() {
         <TradeSection
           side="buy"
           title="Buy"
-          meta={<><SolanaMark /> {positionLoading ? '...' : positionState.walletSol.toFixed(4)}{positionState.walletWsol > 0 ? `+${positionState.walletWsol.toFixed(4)}w` : ''} SOL</>}
+          meta={token.chain === 'robinhood'
+            ? <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#aaa' }}>
+                <span style={{ color: '#ccff00' }}>USDG</span> {evmUsdgBalance.toFixed(2)}
+                <span style={{ color: '#666' }}>|</span>
+                <span style={{ color: '#ccc' }}>ETH</span> {evmEthBalance.toFixed(4)}
+              </span>
+            : <><SolanaMark /> {positionLoading ? '...' : positionState.walletSol.toFixed(4)}{positionState.walletWsol > 0 ? `+${positionState.walletWsol.toFixed(4)}w` : ''} SOL</>}
           buttons={settingsState.buyAmounts}
           selected={settingsState.selectedBuyAmount}
           pending={pendingSide === 'buy'}
           settings={settingsState}
+          editMode={editAmounts}
           onSelect={(value) => patchSettings({ selectedBuyAmount: value })}
           onExecute={(value) => executeTrade('buy', value)}
+          onEditValue={(index, value) => {
+            const next = [...settingsState.buyAmounts];
+            next[index] = value;
+            patchSettings({ buyAmounts: next });
+          }}
         />
 
         <div className="tw-divider" />
@@ -383,20 +531,32 @@ function TrenchOverlay() {
         <TradeSection
           side="sell"
           title="Sell"
-          meta={
-            <span className="tw-position-meta">
-              {positionState.tokenAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })} {positionState.tokenSymbol} /{' '}
-              <span className={positionState.pnlSol > 0 ? 'tw-positive' : positionState.pnlSol < 0 ? 'tw-negative' : 'tw-muted'}>
-                {positionError ? positionError : `RPNL ${positionState.realizedPnlSol.toFixed(4)} SOL`}
+          meta={token.chain === 'robinhood'
+            ? <span className="tw-position-meta">
+                {evmTokenAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })} {token.symbol} /{' '}
+                <span className={(evmPnl?.realizedPnlUsdg ?? 0) > 0 ? 'tw-positive' : (evmPnl?.realizedPnlUsdg ?? 0) < 0 ? 'tw-negative' : 'tw-muted'}>
+                  RPNL {(evmPnl?.realizedPnlUsdg ?? 0).toFixed(2)} USDG
+                </span>
               </span>
-            </span>
+            : <span className="tw-position-meta">
+                {positionState.tokenAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })} {positionState.tokenSymbol} /{' '}
+                <span className={positionState.pnlSol > 0 ? 'tw-positive' : positionState.pnlSol < 0 ? 'tw-negative' : 'tw-muted'}>
+                  {positionError ? positionError : `RPNL ${positionState.realizedPnlSol.toFixed(4)} SOL`}
+                </span>
+              </span>
           }
           buttons={settingsState.sellPercents}
           selected={settingsState.selectedSellPercent}
           pending={pendingSide === 'sell'}
           settings={settingsState}
+          editMode={editAmounts}
           onSelect={(value) => patchSettings({ selectedSellPercent: value })}
           onExecute={(value) => executeTrade('sell', value)}
+          onEditValue={(index, value) => {
+            const next = [...settingsState.sellPercents];
+            next[index] = value;
+            patchSettings({ sellPercents: next });
+          }}
         />
 
         <section className="tw-orders">
@@ -459,10 +619,12 @@ function TradeSection(props: {
   selected: number;
   pending: boolean;
   settings: TradeSettings;
+  editMode?: boolean;
   onSelect: (value: number) => void;
   onExecute: (value: number) => void;
+  onEditValue?: (index: number, value: number) => void;
 }) {
-  const { side, title, meta, buttons, selected, pending, settings, onSelect, onExecute } = props;
+  const { side, title, meta, buttons, selected, pending, settings, editMode, onSelect, onExecute, onEditValue } = props;
 
   return (
     <section className={`tw-trade tw-trade-${side}`}>
@@ -472,42 +634,124 @@ function TradeSection(props: {
       </div>
 
       <div className="tw-quick-grid">
-        {buttons.map((value) => (
-          <button
-            className={`tw-quick tw-quick-${side} ${value === selected ? 'tw-selected' : ''}`}
-            type="button"
-            key={value}
-            onClick={() => {
-              onSelect(value);
-              onExecute(value);
-            }}
-            disabled={pending}
-          >
-            {pending && value === selected ? <Loader2 className="tw-spin" size={13} /> : null}
-            {pending && value === selected ? (side === 'buy' ? 'Buying...' : 'Selling...') : formatTradeValue(side, value)}
-          </button>
-        ))}
+        {buttons.map((value, index) =>
+          editMode ? (
+            <input
+              key={index}
+              className={`tw-quick tw-quick-edit tw-quick-${side}`}
+              type="number"
+              min={0}
+              step={side === 'buy' ? 0.01 : 1}
+              value={value}
+              onChange={(e) => {
+                const n = parseFloat(e.target.value);
+                if (Number.isFinite(n) && n > 0) onEditValue?.(index, n);
+              }}
+              title={side === 'buy' ? 'Buy amount' : 'Sell %'}
+            />
+          ) : (
+            <button
+              className={`tw-quick tw-quick-${side} ${value === selected ? 'tw-selected' : ''}`}
+              type="button"
+              key={value}
+              onClick={() => {
+                onSelect(value);
+                onExecute(value);
+              }}
+              disabled={pending}
+            >
+              {pending && value === selected ? <Loader2 className="tw-spin" size={13} /> : null}
+              {pending && value === selected ? (side === 'buy' ? 'Buying...' : 'Selling...') : formatTradeValue(side, value)}
+            </button>
+          )
+        )}
       </div>
 
-      <div className="tw-param-row">
-        <ParamChip title="Signer">{settings.signerMode === 'local' ? 'HOT' : 'WLT'}</ParamChip>
-        <ParamChip title="Engine">{settings.executionMode === 'jupiter' ? 'JUP' : settings.executionMode === 'pump' ? 'PMP' : 'AUTO'}</ParamChip>
-        <ParamChip title="RPC mode">{settings.rpcMode === 'trench' ? 'TRN' : 'RPC'}</ParamChip>
-        <ParamChip title="Send mode">{settings.sendMode === 'jito' ? 'JITO' : 'STD'}</ParamChip>
-        <ParamChip title="Slippage">SLP {settings.slippage}%</ParamChip>
-        <ParamChip title="Priority fee">{settings.autoFee ? `AUTO·${settings.autoFeeLevel.slice(0,1).toUpperCase()}` : `FEE·${settings.priorityFee}`}</ParamChip>
-        <ParamChip title="Protection">{settings.protection ? 'PROT' : 'OPEN'}</ParamChip>
+      <div className="tw-stat-row">
+        <span className="tw-stat" title="Slippage tolerance">
+          <Percent size={11} /> {settings.slippage}%
+        </span>
+        <span className="tw-stat" title={settings.autoFee ? `Auto priority fee (${settings.autoFeeLevel})` : 'Priority fee'}>
+          <Zap size={11} /> {settings.autoFee ? settings.autoFeeLevel.charAt(0).toUpperCase() + settings.autoFeeLevel.slice(1) : settings.priorityFee}
+        </span>
+        <span className="tw-stat" title="Jito tip">
+          <Coins size={11} /> {settings.jitoTip}
+        </span>
+        <span className={`tw-stat ${settings.protection ? 'tw-stat-on' : 'tw-stat-off'}`} title={settings.protection ? 'MEV protection on' : 'MEV protection off'}>
+          {settings.protection ? <Shield size={11} /> : <ShieldOff size={11} />} {settings.protection ? 'On' : 'Off'}
+        </span>
       </div>
     </section>
   );
 }
 
-function SettingsPanel(props: { settings: TradeSettings; onChange: (patch: Partial<TradeSettings>) => void; onClearHistory: () => void; onClearPnl: () => void }) {
-  const { settings, onChange, onClearHistory, onClearPnl } = props;
+function SettingsPanel(props: {
+  settings: TradeSettings;
+  onChange: (patch: Partial<TradeSettings>) => void;
+  evmWallet: { hasWallet: boolean; unlocked: boolean; address?: string };
+  onEvmWalletImport: (pk: string) => Promise<{ ok: boolean; error?: string }>;
+  onEvmWalletForget: () => Promise<void>;
+  onClearHistory: () => void;
+  onClearPnl: () => void;
+}) {
+  const { settings, onChange, evmWallet, onEvmWalletImport, onEvmWalletForget, onClearHistory, onClearPnl } = props;
+  const [evmKey, setEvmKey] = useState('');
+  const [evmErr, setEvmErr] = useState('');
+  const [evmLoading, setEvmLoading] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  async function handleEvmImport() {
+    const pk = evmKey.trim();
+    if (!/^0x[0-9a-fA-F]{64}$/.test(pk)) { setEvmErr('Invalid private key (must be 0x + 64 hex chars)'); return; }
+    setEvmLoading(true); setEvmErr('');
+    const r = await onEvmWalletImport(pk);
+    setEvmLoading(false);
+    if (!r.ok) { setEvmErr(r.error ?? 'Import failed'); return; }
+    setEvmKey('');
+  }
 
   return (
     <section className="tw-settings-panel">
-      <div className="tw-settings-title">Execution preset</div>
+      <div className="tw-settings-title">Wallets</div>
+      <div className="tw-wallet-manager">
+        <div className="tw-wallet-row">
+          <span className="tw-wallet-label">Solana</span>
+          {settings.localWalletPublicKey ? (
+            <span className="tw-wallet-addr">{settings.localWalletPublicKey.slice(0,6)}…{settings.localWalletPublicKey.slice(-4)}</span>
+          ) : (
+            <span className="tw-wallet-empty">No wallet — import in Options</span>
+          )}
+          <span className={`tw-evm-dot ${settings.localWalletPublicKey ? 'tw-evm-ok' : ''}`} />
+        </div>
+        <div className="tw-wallet-row">
+          <span className="tw-wallet-label">RH Chain</span>
+          {evmWallet.hasWallet ? (
+            <>
+              <span className="tw-wallet-addr">{evmWallet.address ? `${evmWallet.address.slice(0,6)}…${evmWallet.address.slice(-4)}` : 'Locked'}</span>
+              <span className={`tw-evm-dot ${evmWallet.unlocked ? 'tw-evm-ok' : 'tw-evm-locked'}`} />
+              <button className="tw-btn-ghost-xs" type="button" onClick={onEvmWalletForget}>Forget</button>
+            </>
+          ) : (
+            <>
+              <input
+                className="tw-evm-input"
+                type="password"
+                placeholder="0x private key"
+                value={evmKey}
+                onChange={(e) => setEvmKey(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') void handleEvmImport(); }}
+                disabled={evmLoading}
+              />
+              <button className="tw-btn-action-sm" type="button" onClick={handleEvmImport} disabled={evmLoading}>
+                {evmLoading ? '…' : 'Import'}
+              </button>
+            </>
+          )}
+        </div>
+        {evmErr && <div className="tw-evm-error">{evmErr}</div>}
+      </div>
+
+      <div className="tw-settings-group"><span><span className="tw-group-dot">·</span> Trade</span></div>
       <div className="tw-settings-grid">
         <label>
           <span>Buy amounts</span>
@@ -518,16 +762,20 @@ function SettingsPanel(props: { settings: TradeSettings; onChange: (patch: Parti
           <input value={settings.sellPercents.join(' ')} onChange={(event) => onChange({ sellPercents: parseNumberList(event.target.value, defaultSettings.sellPercents) })} />
         </label>
         <label>
-          <span>Slippage</span>
+          <span>Slippage %</span>
           <input type="number" value={settings.slippage} onChange={(event) => onChange({ slippage: Number(event.target.value) })} />
         </label>
         <label>
-          <span>Priority</span>
-          <input type="number" step="0.001" value={settings.priorityFee} disabled={settings.autoFee} onChange={(event) => onChange({ priorityFee: Number(event.target.value) })} />
+          <span>Engine</span>
+          <select value={settings.executionMode} onChange={(event) => onChange({ executionMode: event.target.value as TradeSettings['executionMode'] })}>
+            <option value="jupiter">Jupiter</option>
+            <option value="pump">Pump</option>
+            <option value="auto">Auto</option>
+          </select>
         </label>
         <label>
-          <span>Jito tip</span>
-          <input type="number" step="0.001" value={settings.jitoTip} disabled={settings.autoFee} onChange={(event) => onChange({ jitoTip: Number(event.target.value) })} />
+          <span>Priority fee</span>
+          <input type="number" step="0.001" value={settings.priorityFee} disabled={settings.autoFee} onChange={(event) => onChange({ priorityFee: Number(event.target.value) })} />
         </label>
         <label>
           <span>Auto level</span>
@@ -538,56 +786,10 @@ function SettingsPanel(props: { settings: TradeSettings; onChange: (patch: Parti
           </select>
         </label>
         <label>
-          <span>Auto max</span>
-          <input type="number" step="0.0001" value={settings.autoFeeMax} disabled={!settings.autoFee} onChange={(event) => onChange({ autoFeeMax: Number(event.target.value) })} />
-        </label>
-        <label>
           <span>Signer</span>
           <select value={settings.signerMode} onChange={(event) => onChange({ signerMode: event.target.value as TradeSettings['signerMode'] })}>
             <option value="wallet">Browser wallet</option>
             <option value="local">Local hot wallet</option>
-          </select>
-        </label>
-        <label>
-          <span>Local pubkey</span>
-          <input value={settings.localWalletPublicKey} readOnly />
-        </label>
-        <label>
-          <span>RPC mode</span>
-          <select value={settings.rpcMode} onChange={(event) => onChange({ rpcMode: event.target.value as TradeSettings['rpcMode'] })}>
-            <option value="custom">Custom RPC, 0%</option>
-            <option value="trench">Trench RPC, 0.1%</option>
-          </select>
-        </label>
-        <label>
-          <span>RPC URL</span>
-          <input value={settings.rpcUrl} onChange={(event) => onChange({ rpcUrl: event.target.value })} />
-        </label>
-        <label>
-          <span>Trench router</span>
-          <input value={settings.trenchRpcUrl} onChange={(event) => onChange({ trenchRpcUrl: event.target.value })} />
-        </label>
-        <label>
-          <span>Fee recipient</span>
-          <input value={settings.trenchFeeRecipient} onChange={(event) => onChange({ trenchFeeRecipient: event.target.value })} />
-        </label>
-        <label>
-          <span>Send mode</span>
-          <select value={settings.sendMode} onChange={(event) => onChange({ sendMode: event.target.value as TradeSettings['sendMode'] })}>
-            <option value="rpc">RPC preflight</option>
-            <option value="jito">Jito low latency</option>
-          </select>
-        </label>
-        <label>
-          <span>Jito endpoint</span>
-          <input value={settings.jitoEndpoint} onChange={(event) => onChange({ jitoEndpoint: event.target.value })} />
-        </label>
-        <label>
-          <span>Engine</span>
-          <select value={settings.executionMode} onChange={(event) => onChange({ executionMode: event.target.value as TradeSettings['executionMode'] })}>
-            <option value="jupiter">Jupiter</option>
-            <option value="pump">Pump</option>
-            <option value="auto">Auto</option>
           </select>
         </label>
         <label className="tw-toggle-row">
@@ -606,14 +808,51 @@ function SettingsPanel(props: { settings: TradeSettings; onChange: (patch: Parti
           <span>Hotkeys</span>
           <input type="checkbox" checked={settings.hotkeys} onChange={(event) => onChange({ hotkeys: event.target.checked })} />
         </label>
-        <label className="tw-toggle-row">
-          <span>Jito bundleOnly</span>
-          <input type="checkbox" checked={settings.jitoBundleOnly} onChange={(event) => onChange({ jitoBundleOnly: event.target.checked })} />
-        </label>
-        <div className="tw-settings-actions">
-          <button type="button" onClick={onClearHistory}>Clear history</button>
-          <button type="button" onClick={onClearPnl}>Clear PnL</button>
+      </div>
+
+      <button className="tw-settings-group" type="button" onClick={() => setAdvancedOpen((v) => !v)}>
+        <span><span className="tw-group-dot">·</span> Advanced</span>
+        {advancedOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+      </button>
+      {advancedOpen ? (
+        <div className="tw-settings-grid">
+          <label>
+            <span>Jito tip</span>
+            <input type="number" step="0.001" value={settings.jitoTip} disabled={settings.autoFee} onChange={(event) => onChange({ jitoTip: Number(event.target.value) })} />
+          </label>
+          <label>
+            <span>Auto max</span>
+            <input type="number" step="0.0001" value={settings.autoFeeMax} disabled={!settings.autoFee} onChange={(event) => onChange({ autoFeeMax: Number(event.target.value) })} />
+          </label>
+          <label>
+            <span>Send mode</span>
+            <select value={settings.sendMode} onChange={(event) => onChange({ sendMode: event.target.value as TradeSettings['sendMode'] })}>
+              <option value="rpc">RPC preflight</option>
+              <option value="jito">Jito low latency</option>
+            </select>
+          </label>
+          <label className="tw-toggle-row">
+            <span>Jito bundleOnly</span>
+            <input type="checkbox" checked={settings.jitoBundleOnly} onChange={(event) => onChange({ jitoBundleOnly: event.target.checked })} />
+          </label>
+          <label style={{ gridColumn: '1 / -1' }}>
+            <span>RPC URL</span>
+            <input value={settings.rpcUrl} onChange={(event) => onChange({ rpcUrl: event.target.value })} />
+          </label>
+          <label style={{ gridColumn: '1 / -1' }}>
+            <span>Jito endpoint</span>
+            <input value={settings.jitoEndpoint} onChange={(event) => onChange({ jitoEndpoint: event.target.value })} />
+          </label>
+          <label style={{ gridColumn: '1 / -1' }}>
+            <span>Local pubkey</span>
+            <input value={settings.localWalletPublicKey} readOnly />
+          </label>
         </div>
+      ) : null}
+
+      <div className="tw-settings-actions">
+        <button type="button" onClick={onClearHistory}>Clear history</button>
+        <button type="button" onClick={onClearPnl}>Clear PnL</button>
       </div>
     </section>
   );
@@ -622,14 +861,6 @@ function SettingsPanel(props: { settings: TradeSettings; onChange: (patch: Parti
 function IconButton(props: { label: string; active?: boolean; onClick?: () => void; children: React.ReactNode }) {
   return (
     <button className={`tw-icon-btn ${props.active ? 'tw-icon-active' : ''}`} type="button" title={props.label} aria-label={props.label} onClick={props.onClick}>
-      {props.children}
-    </button>
-  );
-}
-
-function ParamChip(props: { title: string; children: React.ReactNode }) {
-  return (
-    <button className="tw-param-chip" type="button" title={props.title}>
       {props.children}
     </button>
   );
@@ -659,7 +890,18 @@ function SolanaMark() {
 }
 
 async function runTrade(side: TradeSide, amount: number, mint: string | null, settings: TradeSettings, currentWallet: string | null) {
-  const publicKey = settings.signerMode === 'local' ? settings.localWalletPublicKey : currentWallet ?? (await walletRequest('TRENCH_WALLET_CONNECT')).publicKey;
+  let publicKey: string;
+  if (settings.signerMode === 'local') {
+    const status = await new Promise<{ ok: boolean; publicKey?: string; error?: string }>((resolve) => {
+      const sendMessage = window.chrome?.runtime?.sendMessage;
+      if (!sendMessage) { resolve({ ok: false, error: 'Extension runtime unavailable' }); return; }
+      sendMessage({ type: 'TRENCH_HOT_WALLET_STATUS' }, resolve);
+    });
+    if (!status.ok || !status.publicKey) throw new Error('Local hot wallet locked — unlock in options');
+    publicKey = status.publicKey;
+  } else {
+    publicKey = currentWallet ?? (await walletRequest('TRENCH_WALLET_CONNECT')).publicKey ?? '';
+  }
   if (!publicKey) throw new Error('Wallet not connected');
 
   const before = mint ? await getPosition(publicKey, mint, settings) : null;
@@ -672,6 +914,33 @@ async function runTrade(side: TradeSide, amount: number, mint: string | null, se
   if (!response.ok) throw new Error(response.error ?? 'RPC send failed');
 
   return { publicKey, before, prepared, response };
+}
+
+async function runEvmTrade(side: TradeSide, amountUsdg: number, tokenAddress: string | null, settings: TradeSettings, inputCurrency: 'USDG' | 'ETH' = 'USDG'): Promise<EvmTradeResponse> {
+  if (!tokenAddress) throw new Error('No token address detected');
+  if (!/^0x[0-9a-fA-F]{40}$/.test(tokenAddress)) throw new Error('Invalid EVM token address');
+  const slippageBps = Math.round(settings.slippage * 100);
+  return chromeMessageEvm<EvmTradeResponse>({
+    type: 'TRENCH_EVM_TRADE',
+    side,
+    tokenAddress,
+    amountUsdg,
+    slippageBps,
+    inputCurrency,
+  });
+}
+
+function chromeMessageEvm<T>(message: unknown): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const chrome = (window as unknown as { chrome?: { runtime?: { sendMessage?: (msg: unknown, cb: (r: unknown) => void) => void } } }).chrome;
+    if (!chrome?.runtime?.sendMessage) { reject(new Error('Chrome runtime unavailable')); return; }
+    chrome.runtime.sendMessage(message, (response) => {
+      const r = response as { ok?: boolean; error?: string } | undefined;
+      if (!r) { reject(new Error('No response from background')); return; }
+      if (!r.ok) { reject(new Error(r.error ?? 'EVM trade failed')); return; }
+      resolve(response as T);
+    });
+  });
 }
 
 function initPulseQuickBuy() {
@@ -771,6 +1040,171 @@ async function pulseQuickBuy(button: HTMLButtonElement, mint: string) {
   }
 }
 
+function initGmgnQuickBuy() {
+  if (!isGmgnPage()) return;
+  installGmgnStyle();
+  refreshGmgnQuickBuyButtons();
+
+  const observer = new MutationObserver(() => refreshGmgnQuickBuyButtons());
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  const intervalId = window.setInterval(refreshGmgnQuickBuyButtons, 1500);
+
+  function cleanup() {
+    observer.disconnect();
+    window.clearInterval(intervalId);
+    window.removeEventListener('popstate', onPopState);
+  }
+
+  function onPopState() {
+    cleanup();
+    initGmgnQuickBuy();
+  }
+
+  window.addEventListener('popstate', onPopState);
+}
+
+function refreshGmgnQuickBuyButtons() {
+  if (!isGmgnPage()) return;
+
+  for (const card of findGmgnCards()) {
+    if (card.getAttribute(GMGN_CARD_FLAG) === '1') continue;
+
+    const address = readGmgnCardAddress(card);
+    if (!address) continue;
+
+    card.setAttribute(GMGN_CARD_FLAG, '1');
+    if (getComputedStyle(card).position === 'static') card.style.position = 'relative';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = GMGN_BUTTON_CLASS;
+    button.dataset.address = address;
+    button.textContent = 'BUY';
+    button.title = `Trench quick buy ${shortMint(address)}`;
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const current = readGmgnCardAddress(card) ?? address;
+      void gmgnQuickBuy(button, current);
+    });
+    button.addEventListener('pointerdown', (event) => event.stopPropagation());
+
+    card.appendChild(button);
+  }
+}
+
+function findGmgnCards(): HTMLElement[] {
+  const cards = Array.from(document.querySelectorAll<HTMLElement>('div[class*="group/a"]'));
+  return cards.filter((card) => card.offsetWidth > 260 && card.offsetHeight > 60);
+}
+
+function readGmgnCardAddress(card: HTMLElement): string | null {
+  for (const anchor of Array.from(card.querySelectorAll<HTMLAnchorElement>('a[href]'))) {
+    const match = (anchor.getAttribute('href') ?? '').match(EVM_ADDRESS_PATTERN);
+    if (match) return match[0].toLowerCase();
+  }
+
+  for (const element of Array.from(card.querySelectorAll<HTMLElement>('*'))) {
+    for (const attribute of Array.from(element.attributes)) {
+      const match = attribute.value.match(EVM_ADDRESS_PATTERN);
+      if (match) return match[0].toLowerCase();
+    }
+  }
+
+  return null;
+}
+
+async function gmgnQuickBuy(button: HTMLButtonElement, address: string) {
+  if (button.disabled) return;
+  button.disabled = true;
+  button.dataset.state = 'pending';
+  button.textContent = '…';
+
+  try {
+    const settings = await loadExtensionSettings();
+    const status = await chromeMessageEvm<EvmWalletResponse>({ type: 'TRENCH_EVM_WALLET_STATUS' }).catch(() => null);
+    if (!status?.hasWallet) throw new Error('Import RH wallet');
+    if (!status.unlocked) throw new Error('Wallet locked');
+
+    const amountUsdg = settings.selectedBuyAmount || settings.buyAmounts[0] || defaultSettings.selectedBuyAmount;
+    const slippageBps = Math.round(settings.slippage * 100);
+    const result = await runEvmTrade('buy', amountUsdg, address, settings, 'USDG');
+
+    addTradeHistoryDirect({
+      side: 'buy',
+      mint: address,
+      wallet: status.address ?? '',
+      signature: result.hash,
+      summary: `RH buy ${amountUsdg} USDG`,
+      size: formatTradeValue('buy', amountUsdg),
+      status: 'Sent'
+    });
+    button.dataset.state = 'success';
+    button.textContent = 'BOUGHT';
+    window.setTimeout(() => resetGmgnButton(button), 2600);
+  } catch (error) {
+    addTradeHistoryDirect({
+      side: 'buy',
+      mint: address,
+      wallet: '',
+      error: error instanceof Error ? error.message : 'Quick buy failed',
+      size: 'buy',
+      status: 'Failed'
+    });
+    button.dataset.state = 'error';
+    button.textContent = error instanceof Error ? error.message.slice(0, 18) : 'Failed';
+    window.setTimeout(() => resetGmgnButton(button), 3200);
+  }
+}
+
+function resetGmgnButton(button: HTMLButtonElement) {
+  button.disabled = false;
+  button.dataset.state = '';
+  button.textContent = 'BUY';
+}
+
+function installGmgnStyle() {
+  if (document.getElementById(GMGN_STYLE_ID)) return;
+
+  const style = document.createElement('style');
+  style.id = GMGN_STYLE_ID;
+  style.textContent = `
+    .${GMGN_BUTTON_CLASS} {
+      position: absolute;
+      top: 6px;
+      right: 8px;
+      z-index: 60;
+      display: inline-flex;
+      height: 20px;
+      align-items: center;
+      justify-content: center;
+      padding: 0 8px;
+      border: 1px solid rgba(204, 255, 0, 0.5);
+      border-radius: 4px;
+      background: rgba(20, 26, 5, 0.95);
+      color: #ccff00;
+      cursor: pointer;
+      font: 700 9px/1 "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      white-space: nowrap;
+      opacity: 0.85;
+      transition: opacity 80ms, border-color 80ms, color 80ms;
+    }
+    .${GMGN_BUTTON_CLASS}:hover { opacity: 1; border-color: #ccff00; color: #e4ff70; }
+    .${GMGN_BUTTON_CLASS}:disabled { cursor: wait; }
+    .${GMGN_BUTTON_CLASS}[data-state="pending"] { opacity: 1; }
+    .${GMGN_BUTTON_CLASS}[data-state="success"] { border-color: #ccff00; color: #ccff00; opacity: 1; }
+    .${GMGN_BUTTON_CLASS}[data-state="error"] { border-color: #ff5c72; color: #ff5c72; opacity: 1; }
+  `;
+  document.head.appendChild(style);
+}
+
+function isGmgnPage() {
+  return window.location.hostname === 'gmgn.ai';
+}
+
 function installPulseStyle() {
   if (document.getElementById(PULSE_STYLE_ID)) return;
 
@@ -784,20 +1218,20 @@ function installPulseStyle() {
       justify-content: center;
       margin: 3px 3px 0 0;
       padding: 0 8px;
-      border: 1px solid #18281e;
+      border: 1px solid #23280e;
       border-radius: 4px;
       background: #0d0d11;
-      color: #14f195;
+      color: #ccff00;
       cursor: pointer;
       font: 700 9px/1 "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
       letter-spacing: 0.06em;
       text-transform: uppercase;
       white-space: nowrap;
     }
-    .${PULSE_BUTTON_CLASS}:hover { border-color: rgba(20, 241, 149, 0.45); background: rgba(20, 241, 149, 0.06); color: #5fffc0; }
+    .${PULSE_BUTTON_CLASS}:hover { border-color: rgba(204, 255, 0, 0.45); background: rgba(204, 255, 0, 0.06); color: #e4ff70; }
     .${PULSE_BUTTON_CLASS}:disabled { cursor: wait; opacity: 0.5; }
-    .${PULSE_BUTTON_CLASS}[data-state="success"] { border-color: rgba(20, 241, 149, 0.5); color: #14f195; }
-    .${PULSE_BUTTON_CLASS}[data-state="error"] { border-color: #281820; color: #ff607a; }
+    .${PULSE_BUTTON_CLASS}[data-state="success"] { border-color: rgba(204, 255, 0, 0.5); color: #ccff00; }
+    .${PULSE_BUTTON_CLASS}[data-state="error"] { border-color: #281820; color: #ff5c72; }
   `;
   document.head.appendChild(style);
 }
@@ -880,6 +1314,97 @@ function updatePnlLedger(wallet: string, mint: string, side: TradeSide, before: 
   };
   savePnlLedger(wallet, mint, next);
   return next;
+}
+
+async function refreshEvmPnlAfterTrade(
+  address: string,
+  token: string,
+  side: TradeSide,
+  before: EvmBalancePair,
+  setEvmPnl: (ledger: EvmPnlLedger) => void,
+  setEvmTokenAmount: React.Dispatch<React.SetStateAction<number>>
+) {
+  await delay(6000);
+  const after = await fetchEvmBalancePair(address, token).catch(() => null);
+  if (!after) return;
+  const next = updateEvmPnlLedger(address, token, side, before, after);
+  setEvmPnl(next);
+  setEvmTokenAmount(Number(after.token) / 1e18);
+}
+
+function updateEvmPnlLedger(address: string, token: string, side: TradeSide, before: EvmBalancePair, after: EvmBalancePair): EvmPnlLedger {
+  const current = loadEvmPnlLedger(address, token) ?? { rawTokenAmount: '0', costBasisUsdg: 0, realizedPnlUsdg: 0, updatedAt: Date.now() };
+  const tokenDelta = after.token - before.token;
+  const usdgDelta = Number(after.usdg - before.usdg) / 1e6;
+
+  let rawTokenAmount = BigInt(current.rawTokenAmount);
+  let costBasisUsdg = current.costBasisUsdg;
+  let realizedPnlUsdg = current.realizedPnlUsdg;
+
+  if (side === 'buy' && tokenDelta > 0n && usdgDelta < 0) {
+    rawTokenAmount += tokenDelta;
+    costBasisUsdg += Math.abs(usdgDelta);
+  }
+
+  if (side === 'sell' && tokenDelta < 0n && usdgDelta > 0 && rawTokenAmount > 0n && costBasisUsdg > 0) {
+    const soldRaw = minBigInt(-tokenDelta, rawTokenAmount);
+    const soldRatio = Number((soldRaw * 1_000_000n) / rawTokenAmount) / 1_000_000;
+    const removedCostBasis = costBasisUsdg * soldRatio;
+    rawTokenAmount -= soldRaw;
+    costBasisUsdg = Math.max(0, costBasisUsdg - removedCostBasis);
+    realizedPnlUsdg += usdgDelta - removedCostBasis;
+  }
+
+  const next: EvmPnlLedger = {
+    rawTokenAmount: rawTokenAmount.toString(),
+    costBasisUsdg,
+    realizedPnlUsdg,
+    updatedAt: Date.now()
+  };
+  saveEvmPnlLedger(address, token, next);
+  return next;
+}
+
+function loadEvmPnlLedger(address: string, token: string): EvmPnlLedger | null {
+  const store = loadEvmPnlStore();
+  return store[evmPnlKey(address, token)] ?? null;
+}
+
+function saveEvmPnlLedger(address: string, token: string, ledger: EvmPnlLedger) {
+  const store = loadEvmPnlStore();
+  store[evmPnlKey(address, token)] = ledger;
+  localStorage.setItem(EVM_PNL_LEDGER_KEY, JSON.stringify(store));
+}
+
+function loadEvmPnlStore(): Record<string, EvmPnlLedger> {
+  try {
+    return JSON.parse(localStorage.getItem(EVM_PNL_LEDGER_KEY) ?? '{}') as Record<string, EvmPnlLedger>;
+  } catch {
+    return {};
+  }
+}
+
+function evmPnlKey(address: string, token: string) {
+  return `${address.toLowerCase()}:${token.toLowerCase()}`;
+}
+
+async function fetchEvmBalancePair(address: string, token: string): Promise<EvmBalancePair> {
+  const [tokenRaw, usdgRaw] = await Promise.all([
+    fetchEvmRawBalance(address, token),
+    fetchEvmRawBalance(address, RH_USDG_ADDRESS)
+  ]);
+  return { token: tokenRaw, usdg: usdgRaw };
+}
+
+async function fetchEvmRawBalance(address: string, token: string): Promise<bigint> {
+  const data = '0x70a08231' + address.slice(2).toLowerCase().padStart(64, '0');
+  const response = await fetch(RH_RPC_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_call', params: [{ to: token, data }, 'latest'], id: 1 })
+  });
+  const payload = (await response.json().catch(() => null)) as { result?: string } | null;
+  return payload?.result && payload.result !== '0x' ? BigInt(payload.result) : 0n;
 }
 
 function loadPnlLedger(wallet: string, mint: string): PnlLedger | null {
@@ -1080,8 +1605,18 @@ function formatTradeValue(side: TradeSide, value: number) {
 }
 
 function isPublicRpc(settings: TradeSettings) {
-  const url = settings.rpcMode === 'trench' ? settings.trenchRpcUrl : settings.rpcUrl;
-  return url.includes('api.mainnet-beta.solana.com');
+  const url = settings.rpcUrl;
+  return url.includes('api.mainnet-beta.solana.com')
+    || url.includes('solana-rpc.publicnode.com')
+    || url.includes('solana.drpc.org');
+}
+
+function createPresetId() {
+  return `preset-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function sanitizePresetName(name: string) {
+  return name.trim().replace(/\s+/g, ' ').slice(0, 24) || 'Preset';
 }
 
 function shortMint(mint: string) {
