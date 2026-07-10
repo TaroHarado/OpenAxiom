@@ -147,9 +147,9 @@
         letter-spacing: 0.08em;
         text-transform: uppercase;
       }
+      .wallet-box input,
       .wallet-box textarea {
         width: 100%;
-        min-height: 62px;
         border: 1px solid var(--line);
         border-radius: 8px;
         background: var(--bg);
@@ -161,10 +161,14 @@
         resize: vertical;
         transition: border-color 120ms ease, box-shadow 120ms ease;
       }
+      .wallet-box input { height: 34px; resize: none; }
+      .wallet-box textarea { min-height: 62px; }
+      .wallet-box input:focus,
       .wallet-box textarea:focus {
         border-color: rgba(20, 241, 149, 0.55);
         box-shadow: 0 0 0 3px rgba(20, 241, 149, 0.06);
       }
+      button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 
       /* ── hint / result ── */
       .hint {
@@ -181,6 +185,7 @@
         font-weight: 800;
       }
       #result:empty { display: none; }
+      #result.error { color: var(--red); }
       #wallet-status {
         padding: 10px;
         border: 1px solid rgba(20, 241, 149, 0.18);
@@ -193,7 +198,7 @@
         font-weight: 700;
       }
       #wallet-status:empty { display: none; }
-      .wallet-box.hidden { display: none; }
+      .hidden { display: none !important; }
     </style>
   </head>
   <body>
@@ -202,50 +207,41 @@
         <div class="logo">TR</div>
         <div class="head-text">
           <div class="head-title">Trench</div>
-          <div class="head-sub">solana · robinhood chain</div>
+          <div class="head-sub">robinhood chain</div>
         </div>
       </div>
 
       <div class="status">
         <span class="dot"></span>
-        <span>Extension active · public RPC</span>
+        <span id="extension-state">Loading wallet status</span>
       </div>
 
       <div class="section-label">Open terminals</div>
       <div class="actions">
-        <a class="btn primary" href="https://gmgn.ai/?chain=robinhood" target="_blank">gmgn RH</a>
-        <a class="btn" href="https://axiom.trade/pulse" target="_blank">Axiom</a>
+        <a class="btn primary" href="https://gmgn.ai/?chain=robinhood" target="_blank">GMGN RH</a>
+        <a class="btn" href="trenches.html" target="_blank">Trenches</a>
       </div>
 
       <div class="actions">
-        <button class="primary" id="trenches" type="button">⚡ Trenches</button>
-        <button id="options" type="button">Options</button>
+        <button class="primary" id="toggle-import" type="button">Import main</button>
+        <button id="options" type="button">Manage wallets</button>
       </div>
 
-      <div class="section-label">Wallets</div>
-      <div class="hint">Import a burner key to trade. Fund <b>Solana</b> with SOL; fund <b>Robinhood Chain</b> with USDG + a little ETH for gas. Keys are encrypted on your device.</div>
-
+      <div class="section-label">Robinhood wallets</div>
       <div id="wallet-status"></div>
-      <div class="wallet-box" id="wallet-box">
-        <label>Solana hot wallet key
-          <textarea id="secret" placeholder="base58 · hex · bytes · JSON array"></textarea>
+      <div class="wallet-box hidden" id="wallet-import">
+        <label>
+          Wallet name
+          <input id="wallet-name" maxlength="32" value="Main wallet" />
         </label>
-        <button class="primary wide" id="import" type="button">Import Solana wallet</button>
-      </div>
-
-      <div id="rh-status"></div>
-      <div class="wallet-box" id="rh-box">
-        <label>Robinhood Chain key (ERC-20)
-          <textarea id="rh-secret" placeholder="0x + 64 hex characters"></textarea>
+        <label>
+          Private key
+          <textarea id="wallet-private-key" placeholder="0x + 64 hex characters" spellcheck="false"></textarea>
         </label>
-        <button class="primary wide" id="rh-import" type="button">Import Robinhood wallet</button>
+        <button class="primary wide" id="import-wallet" type="button">Import and make active</button>
+        <div id="result" role="status"></div>
       </div>
-
-      <button class="wide" id="manage" type="button">Manage wallets &amp; balances</button>
-      <button class="wide" id="force" type="button">Force panel on this tab</button>
-
-      <div id="result"></div>
-      <div class="hint">No panel? Open DevTools console and look for <b>[Trench] content script mounted</b>. Everything runs on free public RPC — no keys required to browse.</div>
+      <div class="hint">Keys stay device-encrypted in extension storage. GMGN receives addresses and account IDs only. Legacy wallet recovery remains in Options.</div>
     </div>
     <script src="popup.js"></script>
   </body>

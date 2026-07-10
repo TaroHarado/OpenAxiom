@@ -1,97 +1,129 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { CheckCircle2, Coins, ExternalLink, Gauge, History, LockKeyhole, RefreshCw, RotateCcw, Save, ShieldCheck, SlidersHorizontal, Wallet, Zap } from 'lucide-react';
-import { defaultSettings, DRPC_RPC_URL, getActiveRpcUrl, HELIUS_RPC_TEMPLATE, JITO_MAINNET_TRANSACTION_URL, loadExtensionSettings, PUBLIC_TEST_RPC_URL, PUBLICNODE_RPC_URL, resetExtensionSettings, saveExtensionSettings, SHYFT_RPC_TEMPLATE } from './storage';
-import type { EvmWalletResponse, HotWalletResponse, IndexHistoryResponse, TradeSettings } from './types';
+import { Check, CheckCircle2, Copy, KeyRound, Plus, RefreshCw, RotateCcw, Save, ShieldCheck, SlidersHorizontal, Trash2, Users, Wallet } from 'lucide-react';
+import { defaultSettings, loadExtensionSettings, resetExtensionSettings, saveExtensionSettings } from './storage';
+import type { EvmAccountsResponse, TradeSettings } from './types';
 import './options.css';
 
-type Tab = 'setup' | 'wallets' | 'trade' | 'history' | 'advanced';
-type SpeedPreset = 'balanced' | 'fast' | 'turbo';
-
+type Tab = 'wallets' | 'trade';
 const RH_RPC_URL = 'https://rpc.mainnet.chain.robinhood.com';
 const RH_USDG_ADDRESS = '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168';
 
 const TABS: Array<{ id: Tab; label: string; icon: React.ReactNode }> = [
-  { id: 'setup', label: 'Setup', icon: <Zap size={14} /> },
   { id: 'wallets', label: 'Wallets', icon: <Wallet size={14} /> },
   { id: 'trade', label: 'Trade', icon: <SlidersHorizontal size={14} /> },
-  { id: 'history', label: 'History', icon: <History size={14} /> },
-  { id: 'advanced', label: 'Advanced', icon: <ShieldCheck size={14} /> },
 ];
 
 function OptionsApp() {
-  const [tab, setTab] = useState<Tab>('setup');
+  const [tab, setTab] = useState<Tab>('wallets');
   const [settings, setSettings] = useState<TradeSettings>(defaultSettings);
   const [saved, setSaved] = useState(true);
-  const [rpcStatus, setRpcStatus] = useState<{ state: 'idle' | 'testing' | 'ok' | 'error'; text: string }>({ state: 'idle', text: '' });
-  const [secretKey, setSecretKey] = useState('');
-  const [showKeyImport, setShowKeyImport] = useState(false);
-  const [hotWallet, setHotWallet] = useState<HotWalletResponse>({ ok: true, hasWallet: false, unlocked: false });
-  const [indexMint, setIndexMint] = useState('');
-  const [indexWallet, setIndexWallet] = useState('');
-  const [indexStatus, setIndexStatus] = useState<{ state: 'idle' | 'running' | 'ok' | 'error'; text: string }>({ state: 'idle', text: '' });
-  const [evmWallet, setEvmWallet] = useState<EvmWalletResponse>({ ok: true, hasWallet: false, unlocked: false });
+  const [evmAccounts, setEvmAccounts] = useState<EvmAccountsResponse>({ ok: true, accounts: [], activeAccountId: null, selectedAccountIds: [] });
+  const [evmName, setEvmName] = useState('');
+  const [evmMode, setEvmMode] = useState<'create' | 'import'>('create');
+  const [createdAccountId, setCreatedAccountId] = useState('');
   const [evmKey, setEvmKey] = useState('');
   const [evmErr, setEvmErr] = useState('');
+  const [evmNotice, setEvmNotice] = useState('');
   const [evmBusy, setEvmBusy] = useState(false);
-  const [evmBal, setEvmBal] = useState<{ eth: number; usdg: number } | null>(null);
+  const [evmBalances, setEvmBalances] = useState<Record<string, { eth: number; usdg: number; unavailable?: boolean }>>({});
+  const refreshSequence = useRef(0);
 
-  const refreshHotWallet = useCallback(async () => {
-    const result = await hotWalletRequest({ type: 'TRENCH_HOT_WALLET_REFRESH' });
-    setHotWallet(result);
-    if (result.unlocked && result.publicKey) setSettings(await loadExtensionSettings());
-  }, []);
-
-  const refreshEvmBalances = useCallback(async (address: string) => {
-    try {
-      const balances = await fetchEvmBalances(address);
-      setEvmBal(balances);
-    } catch {
-      setEvmBal(null);
+  const refreshEvmAccounts = useCallback(async () => {
+    const sequence = ++refreshSequence.current;
+    const result = await evmAccountsRequest({ type: 'TRENCH_EVM_ACCOUNTS_LIST' });
+    if (sequence !== refreshSequence.current) return;
+    if (!result.ok && !result.legacyRecoveryRequired) {
+      setEvmErr(result.error ?? 'Unable to load Robinhood wallets');
+      return;
     }
+    setEvmAccounts(result);
+    setEvmErr(result.ok ? '' : result.error ?? 'Unable to load Robinhood wallets');
+    const entries = await Promise.all(result.accounts.map(async (account) => {
+      try { return [account.id, await fetchEvmBalances(account.address)] as const; }
+      catch { return [account.id, { eth: 0, usdg: 0, unavailable: true }] as const; }
+    }));
+    if (sequence === refreshSequence.current) setEvmBalances(Object.fromEntries(entries));
   }, []);
-
-  const refreshEvmWallet = useCallback(async () => {
-    const result = await evmWalletRequest({ type: 'TRENCH_EVM_WALLET_STATUS' });
-    setEvmWallet(result);
-    if (result.address) void refreshEvmBalances(result.address);
-    else setEvmBal(null);
-  }, [refreshEvmBalances]);
 
   async function importEvmWallet() {
     let pk = evmKey.trim();
     if (!pk.startsWith('0x')) pk = '0x' + pk;
     if (!/^0x[0-9a-fA-F]{64}$/.test(pk)) { setEvmErr('Invalid key — must be 0x + 64 hex chars'); return; }
-    setEvmBusy(true); setEvmErr('');
-    const result = await evmWalletRequest({ type: 'TRENCH_EVM_WALLET_IMPORT', privateKey: pk });
-    setEvmBusy(false);
-    if (!result.ok) { setEvmErr(result.error ?? 'Import failed'); return; }
-    setEvmKey('');
-    setEvmWallet(result);
-    if (result.address) void refreshEvmBalances(result.address);
+
+    setEvmBusy(true); setEvmErr(''); setEvmNotice('');
+    try {
+      const result = await evmAccountsRequest({ type: 'TRENCH_EVM_ACCOUNT_IMPORT', name: evmName, privateKey: pk });
+      if (!result.ok) { setEvmErr(result.error ?? 'Import failed'); return; }
+      setEvmKey('');
+      setEvmName('');
+      setEvmAccounts(result);
+      refreshSequence.current += 1;
+      void refreshEvmAccounts();
+    } finally {
+      setEvmBusy(false);
+    }
   }
 
-  async function forgetEvmWallet() {
-    await evmWalletRequest({ type: 'TRENCH_EVM_WALLET_FORGET' });
-    setEvmWallet({ ok: true, hasWallet: false, unlocked: false });
-    setEvmBal(null);
-    setEvmErr('');
+  async function createEvmWallet() {
+    if (evmAccounts.legacyRecoveryRequired) {
+      setEvmErr('Recover the legacy wallet before creating another wallet');
+      return;
+    }
+    setEvmBusy(true); setEvmErr(''); setEvmNotice('');
+    try {
+      const result = await evmAccountsRequest({ type: 'TRENCH_EVM_ACCOUNT_CREATE', name: evmName });
+      if (!result.ok) { setEvmErr(result.error ?? 'Create failed'); return; }
+      setEvmName('');
+      setEvmAccounts(result);
+      setCreatedAccountId(result.createdAccountId ?? '');
+      refreshSequence.current += 1;
+      void refreshEvmAccounts();
+    } finally {
+      setEvmBusy(false);
+    }
+  }
+
+  async function mutateEvmAccounts(message: unknown) {
+    setEvmNotice('');
+    const result = await evmAccountsRequest(message);
+    if (!result.ok) { setEvmErr(result.error ?? 'Wallet update failed'); return; }
+    setEvmAccounts(result);
+    void refreshEvmAccounts();
+  }
+
+  async function copyCreatedKey() {
+    await copyAccountKey(createdAccountId);
+  }
+
+  async function copyAccountKey(accountId: string) {
+    try {
+      const result = await evmAccountsRequest({ type: 'TRENCH_EVM_ACCOUNT_EXPORT', accountId });
+      if (!result.ok || !result.privateKey) {
+        setEvmErr(result.error ?? 'Unable to export the wallet key');
+        return;
+      }
+      await navigator.clipboard.writeText(result.privateKey);
+      setEvmErr('');
+      setEvmNotice('Private key copied. Store the backup securely.');
+    } catch (error) {
+      setEvmErr(error instanceof Error ? error.message : 'Unable to copy the wallet key');
+    }
   }
 
   useEffect(() => {
     void loadExtensionSettings().then(setSettings);
-    void refreshHotWallet();
-    void refreshEvmWallet();
-  }, [refreshHotWallet, refreshEvmWallet]);
+    void refreshEvmAccounts();
+  }, [refreshEvmAccounts]);
 
   useEffect(() => {
     const refreshVisible = () => {
-      if (document.visibilityState === 'visible') void refreshHotWallet();
+      if (document.visibilityState === 'visible') void refreshEvmAccounts();
     };
     window.addEventListener('focus', refreshVisible);
     window.addEventListener('pageshow', refreshVisible);
     document.addEventListener('visibilitychange', refreshVisible);
-    const interval = window.setInterval(() => void refreshHotWallet(), 10_000);
+    const interval = window.setInterval(() => void refreshEvmAccounts(), 10_000);
 
     return () => {
       window.removeEventListener('focus', refreshVisible);
@@ -99,7 +131,7 @@ function OptionsApp() {
       document.removeEventListener('visibilitychange', refreshVisible);
       window.clearInterval(interval);
     };
-  }, [refreshHotWallet]);
+  }, [refreshEvmAccounts]);
 
   function patch(value: Partial<TradeSettings>) {
     setSettings((current) => ({ ...current, ...value }));
@@ -109,122 +141,40 @@ function OptionsApp() {
   async function save() {
     await saveExtensionSettings(settings);
     setSaved(true);
-    await refreshHotWallet();
   }
 
   async function reset() {
     const defaults = await resetExtensionSettings();
     setSettings(defaults);
     setSaved(true);
-    await refreshHotWallet();
   }
 
-  function applySpeedPreset(preset: SpeedPreset) {
-    if (preset === 'balanced') {
-      patch({ autoFee: true, autoFeeLevel: 'normal', sendMode: 'rpc', jitoBundleOnly: false });
-      return;
-    }
-    if (preset === 'fast') {
-      patch({ autoFee: true, autoFeeLevel: 'fast', sendMode: 'jito', jitoBundleOnly: false });
-      return;
-    }
-    patch({ autoFee: true, autoFeeLevel: 'turbo', sendMode: 'jito', jitoBundleOnly: true });
-  }
-
-  async function testRpc() {
-    setRpcStatus({ state: 'testing', text: 'Testing...' });
-    try {
-      const result = await measureRpc(getActiveRpcUrl(settings));
-      setRpcStatus({ state: 'ok', text: `${result.health} / slot ${result.slot.toLocaleString()} / ${result.ms} ms` });
-    } catch (error) {
-      setRpcStatus({ state: 'error', text: error instanceof Error ? error.message : 'RPC test failed' });
-    }
-  }
-
-  async function importHotWallet() {
-    const result = await hotWalletRequest({ type: 'TRENCH_HOT_WALLET_IMPORT', secretKey });
-    setHotWallet(result);
-    if (!result.ok) return;
-    setSecretKey('');
-    setShowKeyImport(false);
-    if (result.publicKey) await applyAndSave({ signerMode: 'local', localWalletPublicKey: result.publicKey });
-    void refreshHotWallet();
-  }
-
-  async function unlockHotWallet() {
-    const result = await hotWalletRequest({ type: 'TRENCH_HOT_WALLET_UNLOCK' });
-    setHotWallet(result);
-    if (!result.ok) return;
-    if (result.publicKey) await applyAndSave({ signerMode: 'local', localWalletPublicKey: result.publicKey });
-  }
-
-  async function lockHotWallet() {
-    setHotWallet(await hotWalletRequest({ type: 'TRENCH_HOT_WALLET_LOCK' }));
-  }
-
-  async function forgetHotWallet() {
-    setHotWallet(await hotWalletRequest({ type: 'TRENCH_HOT_WALLET_FORGET' }));
-    setShowKeyImport(true);
-    await applyAndSave({ signerMode: 'wallet', localWalletPublicKey: '' });
-  }
-
-  async function applyAndSave(value: Partial<TradeSettings>) {
-    const next = { ...settings, ...value };
-    setSettings(next);
-    await saveExtensionSettings(next);
-    setSaved(true);
-  }
-
-  async function indexHistory() {
-    const wallet = indexWallet.trim() || settings.localWalletPublicKey;
-    const mint = indexMint.trim();
-    if (!wallet) { setIndexStatus({ state: 'error', text: 'No wallet address.' }); return; }
-    if (!mint) { setIndexStatus({ state: 'error', text: 'Enter token mint.' }); return; }
-
-    setIndexStatus({ state: 'running', text: 'Scanning...' });
-    try {
-      const result = await new Promise<IndexHistoryResponse>((resolve) => {
-        chrome.runtime.sendMessage({ type: 'TRENCH_INDEX_HISTORY', wallet, mint, settings }, (response: unknown) => resolve(response as IndexHistoryResponse));
-      });
-      setIndexStatus(result.ok
-        ? { state: 'ok', text: `${result.scanned} txs scanned / ${result.matched} matched / cost ${result.costBasisSol.toFixed(4)} SOL / PnL ${result.realizedPnlSol.toFixed(4)} SOL` }
-        : { state: 'error', text: result.error ?? 'Index failed' });
-    } catch (error) {
-      setIndexStatus({ state: 'error', text: error instanceof Error ? error.message : 'Index failed' });
-    }
-  }
-
-  const speed = getSpeedPreset(settings);
-  const walletReady = settings.signerMode === 'wallet' || hotWallet.unlocked;
-  const currentWallet = hotWallet.publicKey || settings.localWalletPublicKey;
-  const walletBalance = hotWallet.walletSol === undefined ? (hotWallet.balanceError ? 'Balance error' : 'No balance') : formatSol(hotWallet.walletSol);
-  const runLabel = walletReady ? 'Ready to trade' : 'Import or unlock wallet';
-  const shouldShowKeyImport = !hotWallet.hasWallet || showKeyImport;
+  const activeEvmAccount = evmAccounts.accounts.find((account) => account.id === evmAccounts.activeAccountId);
+  const activeEvmBalance = activeEvmAccount ? evmBalances[activeEvmAccount.id] : undefined;
 
   return (
     <main className="opt-shell">
       <header className="opt-header">
         <div className="opt-logo">TR</div>
         <div className="opt-title-block">
-          <span className="opt-eyebrow">Built by traders, for traders</span>
-          <span className="opt-title">Control room</span>
+          <span className="opt-eyebrow">Robinhood Chain execution</span>
+          <span className="opt-title">Trench settings</span>
         </div>
         <div className="opt-header-right">
-          {!saved && <span className="opt-unsaved">Unsaved</span>}
-          <button className="opt-btn-ghost" type="button" onClick={reset}><RotateCcw size={13} /> Reset</button>
-          <button className="opt-btn-primary" type="button" onClick={save}><Save size={13} /> Save</button>
+          {tab === 'trade' && !saved && <span className="opt-unsaved">Unsaved</span>}
+          {tab === 'trade' && <button className="opt-btn-ghost" type="button" onClick={reset}><RotateCcw size={13} /> Reset</button>}
+          {tab === 'trade' && <button className="opt-btn-primary" type="button" onClick={save}><Save size={13} /> Save changes</button>}
         </div>
       </header>
 
       <section className="opt-command-strip">
-        <StatusTile label="Wallet" value={walletReady ? signerLabel(settings, hotWallet) : 'Not ready'} state={walletReady ? 'ok' : 'warn'} />
-        <StatusTile label="Balance" value={walletBalance} state={hotWallet.walletSol === undefined ? 'warn' : 'ok'} />
-        <StatusTile label="Speed" value={speed.toUpperCase()} state={speed === 'turbo' ? 'warn' : 'ok'} />
-        <StatusTile label="Route" value={settings.executionMode.toUpperCase()} state="ok" />
-        <StatusTile label="Fees" value="0% always" state="ok" />
-        <div className={`opt-run-state ${walletReady ? 'opt-run-ok' : 'opt-run-warn'}`}>
+        <StatusTile label="RH active" value={activeEvmAccount?.name ?? 'Not ready'} state={activeEvmAccount ? 'ok' : 'warn'} />
+        <StatusTile label="ETH" value={activeEvmBalance ? activeEvmBalance.eth.toFixed(5) : 'No balance'} state={activeEvmBalance ? 'ok' : 'warn'} />
+        <StatusTile label="Batch" value={`${evmAccounts.selectedAccountIds.length} / ${evmAccounts.accounts.length} wallets`} state={evmAccounts.selectedAccountIds.length ? 'ok' : 'warn'} />
+        <StatusTile label="Storage" value="Device encrypted" state="ok" />
+        <div className={`opt-run-state ${activeEvmAccount ? 'opt-run-ok' : 'opt-run-warn'}`}>
           <CheckCircle2 size={14} />
-          <span>{runLabel}</span>
+          <span>{activeEvmAccount ? 'Robinhood ready' : 'Add a Robinhood wallet'}</span>
         </div>
       </section>
 
@@ -237,240 +187,135 @@ function OptionsApp() {
       </nav>
 
       <div className="opt-body">
-        {tab === 'setup' && (
-          <div className="opt-workspace">
-            <section className="opt-main-card">
-              <PanelTitle kicker="Step 1" title="Choose how Trench signs" />
-              <Segmented
-                value={settings.signerMode}
-                options={[
-                  { value: 'local', label: 'Hot wallet', note: 'Instant, no popup' },
-                  { value: 'wallet', label: 'Browser wallet', note: 'Phantom approval' },
-                ]}
-                onChange={(value) => patch({ signerMode: value as TradeSettings['signerMode'] })}
-              />
-
-              {settings.signerMode === 'local' && (
-                <div className="opt-wallet-panel">
-                  <div className={`opt-wallet-state ${hotWallet.unlocked ? 'opt-wallet-unlocked' : hotWallet.hasWallet ? 'opt-wallet-locked' : 'opt-wallet-none'}`}>
-                    <div className="opt-wallet-state-dot" />
-                    <div>
-                      <div className="opt-wallet-state-label">{hotWallet.unlocked ? 'Unlocked' : hotWallet.hasWallet ? 'Locked' : 'No key imported'}</div>
-                      {currentWallet && <div className="opt-wallet-pubkey">{currentWallet}</div>}
-                      {currentWallet && <div className="opt-wallet-balance">SOL balance: {walletBalance}</div>}
-                      {hotWallet.error && <div className="opt-wallet-error">{hotWallet.error}</div>}
-                      {hotWallet.balanceError && <div className="opt-wallet-error">{hotWallet.balanceError}</div>}
-                    </div>
-                  </div>
-
-                  {currentWallet && <button className="opt-btn-ghost-sm" type="button" onClick={refreshHotWallet}><RefreshCw size={12} /> Refresh balance</button>}
-                  {!hotWallet.unlocked && hotWallet.hasWallet && <button className="opt-btn-action" type="button" onClick={unlockHotWallet}>Unlock local wallet</button>}
-                  {hotWallet.unlocked && <button className="opt-btn-ghost-sm" type="button" onClick={lockHotWallet}>Lock wallet</button>}
-
-                  {shouldShowKeyImport && (
-                    <>
-                      <label className="opt-row opt-row-tight">
-                        <span className="opt-label">Private key</span>
-                        <textarea value={secretKey} onChange={(event) => setSecretKey(event.target.value)} placeholder="Paste full base58 private key, JSON array, or exported secretKey" spellCheck={false} />
+        {tab === 'wallets' && (
+          <div className="opt-wallet-desk">
+            <section className="opt-account-registry">
+              <div className="opt-registry-head">
+                <div>
+                  <span className="opt-registry-kicker">Robinhood Chain</span>
+                  <h2>Trading accounts</h2>
+                   <p>Choose one active wallet for balances, then select the wallets that receive batch orders.</p>
+                </div>
+                <div className="opt-registry-count"><strong>{evmAccounts.accounts.length}</strong><span>/ 10</span></div>
+              </div>
+              <div className="opt-account-columns" aria-hidden="true">
+                <span>Active</span><span>Batch</span><span>Account</span><span>Funds</span><span />
+              </div>
+              <div className="opt-account-list">
+                {evmErr && <div className="opt-result opt-result-error">{evmErr}</div>}
+                {evmNotice && <div className="opt-result opt-result-ok">{evmNotice}</div>}
+                {evmAccounts.accounts.map((account) => {
+                  const balance = evmBalances[account.id];
+                  return (
+                    <div className={`opt-account-row${account.active ? ' opt-account-active' : ''}`} key={account.id}>
+                      <label className="opt-choice" title="Use for single trades">
+                        <input type="radio" name="active-account" checked={account.active} onChange={() => void mutateEvmAccounts({ type: 'TRENCH_EVM_ACCOUNT_SET_ACTIVE', accountId: account.id })} />
+                        <span />
                       </label>
-                      <button className="opt-btn-action" type="button" onClick={importHotWallet} disabled={!secretKey.trim()}>Import and use key</button>
-                    </>
-                  )}
-                  {hotWallet.hasWallet && !showKeyImport && <button className="opt-btn-ghost-sm" type="button" onClick={() => setShowKeyImport(true)}>Replace key</button>}
-                  {hotWallet.hasWallet && <button className="opt-btn-danger" type="button" onClick={forgetHotWallet}>Forget local key</button>}
-                  <p className="opt-note"><LockKeyhole size={12} /> Device encrypted. Raw key is only kept in extension session while unlocked.</p>
+                      <label className="opt-check" title="Include in batch trades">
+                        <input type="checkbox" checked={account.selected} onChange={() => {
+                          const ids = account.selected
+                            ? evmAccounts.selectedAccountIds.filter((id) => id !== account.id)
+                            : [...evmAccounts.selectedAccountIds, account.id];
+                          if (!ids.length) return;
+                          void mutateEvmAccounts({ type: 'TRENCH_EVM_ACCOUNTS_SET_SELECTED', accountIds: ids });
+                        }} />
+                        <span><Check size={11} /></span>
+                      </label>
+                      <button className="opt-account-main" type="button" onClick={() => void mutateEvmAccounts({ type: 'TRENCH_EVM_ACCOUNT_SET_ACTIVE', accountId: account.id })}>
+                        <span className="opt-account-avatar">{account.name.slice(0, 2).toUpperCase()}</span>
+                        <span><strong>{account.name}</strong><small>{shortAddress(account.address)}</small></span>
+                      </button>
+                      <div className="opt-account-funds">
+                        <strong>{balance?.unavailable ? 'Unavailable' : balance ? `${balance.eth.toFixed(4)} ETH` : '...'}</strong>
+                        <small>{balance?.unavailable ? 'RPC error' : balance ? `${balance.usdg.toFixed(2)} USDG` : 'Loading'}</small>
+                      </div>
+                      <div className="opt-account-actions">
+                        <button className="opt-icon-export" type="button" title={`Copy ${account.name} private key`} onClick={() => void copyAccountKey(account.id)}><KeyRound size={13} /><span>Export</span></button>
+                        <button className="opt-icon-danger" type="button" title={`Remove ${account.name}`} onClick={() => {
+                          if (window.confirm(`Remove ${account.name} (${shortAddress(account.address)}) from Trench?`)) {
+                            void mutateEvmAccounts({ type: 'TRENCH_EVM_ACCOUNT_REMOVE', accountId: account.id });
+                          }
+                        }}><Trash2 size={14} /></button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {!evmAccounts.accounts.length && (
+                  <div className="opt-account-empty"><Users size={20} /><strong>No Robinhood accounts</strong><span>Create one or import an existing private key.</span></div>
+                )}
+              </div>
+              <div className="opt-batch-bar">
+                <span><Users size={13} /> {evmAccounts.selectedAccountIds.length} selected for batch</span>
+                <button type="button" onClick={() => void mutateEvmAccounts({ type: 'TRENCH_EVM_ACCOUNTS_SET_SELECTED', accountIds: evmAccounts.accounts.map((account) => account.id) })}>Select all</button>
+                <button type="button" onClick={() => void mutateEvmAccounts({ type: 'TRENCH_EVM_ACCOUNTS_SET_SELECTED', accountIds: evmAccounts.activeAccountId ? [evmAccounts.activeAccountId] : [] })}>Active only</button>
+                <button type="button" onClick={() => void refreshEvmAccounts()}><RefreshCw size={12} /> Refresh</button>
+              </div>
+            </section>
+
+            <aside className="opt-account-command">
+              <div className="opt-command-tabs">
+                <button className={evmMode === 'create' ? 'active' : ''} type="button" onClick={() => setEvmMode('create')}><Plus size={13} /> Create</button>
+                <button className={evmMode === 'import' ? 'active' : ''} type="button" onClick={() => setEvmMode('import')}><Wallet size={13} /> Import</button>
+              </div>
+              {createdAccountId ? (
+                <div className="opt-backup-panel">
+                  <span className="opt-registry-kicker">Backup required</span>
+                   <h3>Back up the new wallet</h3>
+                   <p>Copy the private key directly to a secure password manager. Trench will not display it on the page.</p>
+                  <button className="opt-btn-action" type="button" onClick={() => void copyCreatedKey()}><Copy size={13} /> Copy private key</button>
+                  <button className="opt-btn-ghost-sm" type="button" onClick={() => setCreatedAccountId('')}>I stored the backup</button>
+                </div>
+              ) : (
+                <div className="opt-create-panel">
+                   <span className="opt-registry-kicker">Saved immediately</span>
+                  <h3>{evmAccounts.legacyRecoveryRequired ? 'Recover legacy wallet' : evmMode === 'create' ? 'Create Robinhood wallet' : 'Import Robinhood wallet'}</h3>
+                  {evmAccounts.passwordVaultArchived && <div className="opt-result">The previous encrypted vault was preserved locally. Re-import any wallet that is not listed.</div>}
+                  {evmAccounts.legacyRecoveryRequired && <div className="opt-result opt-result-error">The legacy wallet encryption key is unavailable. Import that wallet's private key to recover it.</div>}
+                  <label className="opt-row"><span className="opt-label">Account name</span><input value={evmName} maxLength={32} onChange={(event) => setEvmName(event.target.value)} placeholder={`Wallet ${evmAccounts.accounts.length + 1}`} /></label>
+                  {(evmMode === 'import' || evmAccounts.legacyRecoveryRequired) && <label className="opt-row"><span className="opt-label">Private key</span><textarea value={evmKey} onChange={(event) => setEvmKey(event.target.value)} placeholder="0x + 64 hex characters" spellCheck={false} /></label>}
+                  <button className="opt-btn-action" type="button" disabled={evmBusy || evmAccounts.accounts.length >= 10 || ((evmMode === 'import' || Boolean(evmAccounts.legacyRecoveryRequired)) && !evmKey.trim())} onClick={() => void (evmMode === 'create' && !evmAccounts.legacyRecoveryRequired ? createEvmWallet() : importEvmWallet())}>
+                    {evmBusy ? 'Working...' : evmAccounts.legacyRecoveryRequired ? 'Recover wallet' : evmMode === 'create' ? 'Create wallet' : 'Import wallet'}
+                  </button>
+                   <div className="opt-security-copy"><ShieldCheck size={14} /><span>Wallet actions apply immediately. Keys stay encrypted in extension storage; trading pages receive only addresses and account IDs.</span></div>
                 </div>
               )}
-            </section>
-
-            <section className="opt-main-card">
-              <PanelTitle kicker="Step 2" title="Pick execution behavior" />
-              <Segmented
-                value={settings.executionMode}
-                options={[
-                  { value: 'auto', label: 'Auto', note: 'Best default' },
-                  { value: 'jupiter', label: 'Jupiter', note: 'Aggregator' },
-                  { value: 'pump', label: 'Pump', note: 'Bonding curve' },
-                ]}
-                onChange={(value) => patch({ executionMode: value as TradeSettings['executionMode'] })}
-              />
-
-              <div className="opt-divider" />
-
-              <PanelTitle kicker="Step 3" title="Pick speed" compact />
-              <Segmented
-                value={speed}
-                options={[
-                  { value: 'balanced', label: 'Balanced', note: 'RPC preflight' },
-                  { value: 'fast', label: 'Fast', note: 'Jito send' },
-                  { value: 'turbo', label: 'Turbo', note: 'Jito bundle only' },
-                ]}
-                onChange={(value) => applySpeedPreset(value as SpeedPreset)}
-              />
-            </section>
-          </div>
-        )}
-
-        {tab === 'wallets' && (
-          <div className="opt-workspace">
-            <section className="opt-main-card">
-              <PanelTitle kicker="Solana" title="SOL hot wallet" />
-              <div className="opt-wallet-panel">
-                <div className={`opt-wallet-state ${hotWallet.unlocked ? 'opt-wallet-unlocked' : hotWallet.hasWallet ? 'opt-wallet-locked' : 'opt-wallet-none'}`}>
-                  <div className="opt-wallet-state-dot" />
-                  <div>
-                    <div className="opt-wallet-state-label">{hotWallet.unlocked ? 'Unlocked' : hotWallet.hasWallet ? 'Locked' : 'No key imported'}</div>
-                    {currentWallet && <div className="opt-wallet-pubkey">{currentWallet}</div>}
-                    {currentWallet && <div className="opt-wallet-balance">Balance: {walletBalance}</div>}
-                    {hotWallet.error && <div className="opt-wallet-error">{hotWallet.error}</div>}
-                    {hotWallet.balanceError && <div className="opt-wallet-error">{hotWallet.balanceError}</div>}
-                  </div>
-                </div>
-
-                {currentWallet && <button className="opt-btn-ghost-sm" type="button" onClick={refreshHotWallet}><RefreshCw size={12} /> Refresh balance</button>}
-                {!hotWallet.unlocked && hotWallet.hasWallet && <button className="opt-btn-action" type="button" onClick={unlockHotWallet}>Unlock wallet</button>}
-                {hotWallet.unlocked && <button className="opt-btn-ghost-sm" type="button" onClick={lockHotWallet}>Lock wallet</button>}
-
-                {shouldShowKeyImport && (
-                  <>
-                    <label className="opt-row opt-row-tight">
-                      <span className="opt-label">Private key</span>
-                      <textarea value={secretKey} onChange={(event) => setSecretKey(event.target.value)} placeholder="base58 · hex · bytes · JSON array" spellCheck={false} />
-                    </label>
-                    <button className="opt-btn-action" type="button" onClick={importHotWallet} disabled={!secretKey.trim()}>Import key</button>
-                  </>
-                )}
-                {hotWallet.hasWallet && !showKeyImport && <button className="opt-btn-ghost-sm" type="button" onClick={() => setShowKeyImport(true)}>Replace key</button>}
-                {hotWallet.hasWallet && <button className="opt-btn-danger" type="button" onClick={forgetHotWallet}>Forget key</button>}
-                <p className="opt-note"><Coins size={12} /> Fund with <strong>SOL</strong> — it covers both trades and network fees.</p>
-                <p className="opt-note"><LockKeyhole size={12} /> Device-encrypted. Signs Jupiter / Pump swaps on Solana.</p>
-              </div>
-            </section>
-
-            <section className="opt-main-card">
-              <PanelTitle kicker="Robinhood Chain" title="ERC-20 wallet" />
-              <div className="opt-wallet-panel">
-                <div className={`opt-wallet-state ${evmWallet.unlocked ? 'opt-wallet-unlocked' : evmWallet.hasWallet ? 'opt-wallet-locked' : 'opt-wallet-none'}`}>
-                  <div className="opt-wallet-state-dot" />
-                  <div>
-                    <div className="opt-wallet-state-label">{evmWallet.hasWallet ? (evmWallet.unlocked ? 'Unlocked' : 'Locked') : 'No key imported'}</div>
-                    {evmWallet.address && <div className="opt-wallet-pubkey">{evmWallet.address}</div>}
-                    {evmBal && <div className="opt-wallet-balance">ETH {evmBal.eth.toFixed(5)} · USDG {evmBal.usdg.toFixed(2)}</div>}
-                    {evmErr && <div className="opt-wallet-error">{evmErr}</div>}
-                  </div>
-                </div>
-
-                {evmWallet.address && <button className="opt-btn-ghost-sm" type="button" onClick={() => evmWallet.address && refreshEvmBalances(evmWallet.address)}><RefreshCw size={12} /> Refresh balance</button>}
-
-                {!evmWallet.hasWallet && (
-                  <>
-                    <label className="opt-row opt-row-tight">
-                      <span className="opt-label">Private key</span>
-                      <textarea value={evmKey} onChange={(event) => setEvmKey(event.target.value)} placeholder="0x + 64 hex characters" spellCheck={false} />
-                    </label>
-                    <button className="opt-btn-action" type="button" onClick={importEvmWallet} disabled={!evmKey.trim() || evmBusy}>{evmBusy ? 'Importing…' : 'Import key'}</button>
-                  </>
-                )}
-                {evmWallet.hasWallet && <button className="opt-btn-danger" type="button" onClick={forgetEvmWallet}>Forget key</button>}
-                <p className="opt-note"><Coins size={12} /> Fund with <strong>USDG</strong> to trade, plus a little <strong>ETH</strong> for gas.</p>
-                <p className="opt-note"><LockKeyhole size={12} /> Device-encrypted. Signs Uniswap V3 swaps (USDG / ETH) on Robinhood Chain.</p>
-              </div>
-            </section>
+            </aside>
           </div>
         )}
 
         {tab === 'trade' && (
           <div className="opt-workspace">
             <section className="opt-main-card">
-              <PanelTitle kicker="Buttons" title="Amounts on the floating terminal" />
-              <QuickList label="Buy buttons, SOL" values={settings.buyAmounts} suffix="" onChange={(value) => patch({ buyAmounts: parseNumberList(value, defaultSettings.buyAmounts, 4) })} />
-              <QuickList label="Sell buttons" values={settings.sellPercents} suffix="%" onChange={(value) => patch({ sellPercents: parseNumberList(value, defaultSettings.sellPercents, 4).map((item) => Math.min(100, item)) })} />
+              <PanelTitle kicker="Quick trade" title="Button presets" />
+              <PresetEditor label="Buy amounts" note="ETH per wallet" values={settings.buyAmounts} suffix="ETH" step={0.0001} onChange={(buyAmounts) => patch({
+                buyAmounts,
+                selectedBuyAmount: buyAmounts.includes(settings.selectedBuyAmount) ? settings.selectedBuyAmount : buyAmounts[0],
+              })} />
+              <PresetEditor label="Sell position" note="Percent per wallet" values={settings.sellPercents} suffix="%" step={1} max={100} onChange={(sellPercents) => patch({
+                sellPercents,
+                selectedSellPercent: sellPercents.includes(settings.selectedSellPercent) ? settings.selectedSellPercent : sellPercents[0],
+              })} />
             </section>
 
             <section className="opt-main-card">
-              <PanelTitle kicker="Risk" title="Guardrails" />
+              <PanelTitle kicker="GMGN" title="Page controls" />
+              <ToggleRow label="Show Trench on GMGN" sub="Overlay, card buttons and hotkeys" checked={settings.showOnGmgn} onChange={(value) => patch({ showOnGmgn: value })} />
+              <ToggleRow label="Keyboard shortcuts" sub="1-4 buy / Q-W-E-R sell while Trench is active" checked={settings.hotkeys} onChange={(value) => patch({ hotkeys: value })} />
+              <div className="opt-divider" />
               <RangeField label="Slippage %" value={settings.slippage} min={0} max={50} step={0.5} onChange={(value) => patch({ slippage: value })} />
-              <ToggleRow label="Confirmation dialog" sub="Require one more click before sending a trade" checked={settings.confirmation} onChange={(value) => patch({ confirmation: value })} />
-              <ToggleRow label="MEV protection" sub="Keep Trench guardrails active on buys" checked={settings.protection} onChange={(value) => patch({ protection: value })} />
-              <ToggleRow label="Hotkeys" sub="1-4 buy / Q-W-E-R sell" checked={settings.hotkeys} onChange={(value) => patch({ hotkeys: value })} />
             </section>
           </div>
         )}
 
-        {tab === 'history' && (
-          <div className="opt-workspace">
-            <section className="opt-main-card">
-              <PanelTitle kicker="PnL" title="Recover a position" />
-              <p className="opt-hint">Scan recent swaps to rebuild cost basis and realized PnL for a token already in the wallet.</p>
-              <Row label="Wallet address">
-                <input value={indexWallet} onChange={(event) => setIndexWallet(event.target.value)} placeholder={settings.localWalletPublicKey || 'Wallet public key'} spellCheck={false} />
-              </Row>
-              <Row label="Token mint">
-                <input value={indexMint} onChange={(event) => setIndexMint(event.target.value)} placeholder="Token mint address" spellCheck={false} />
-              </Row>
-              <button className="opt-btn-action" type="button" disabled={indexStatus.state === 'running'} onClick={() => void indexHistory()}>
-                {indexStatus.state === 'running' ? 'Scanning...' : 'Scan history'}
-              </button>
-              {indexStatus.text && <div className={`opt-result opt-result-${indexStatus.state === 'running' ? 'testing' : indexStatus.state}`}>{indexStatus.text}</div>}
-            </section>
-
-            <section className="opt-side-card">
-              <PanelTitle kicker="What it reads" title="Local PnL index" />
-              <FlowItem title="Scan" body="Fetches up to 200 confirmed wallet transactions from the configured RPC." />
-              <FlowItem title="Match" body="Keeps Jupiter and Pump swaps that touch the mint." />
-              <FlowItem title="Save" body="Writes the ledger locally so the widget loads with usable PnL." />
-            </section>
-          </div>
-        )}
-
-        {tab === 'advanced' && (
-          <div className="opt-workspace opt-workspace-advanced">
-            <section className="opt-main-card">
-              <PanelTitle kicker="RPC" title="Raw network settings" />
-              <Row label="Custom RPC URL">
-                <input value={settings.rpcUrl} onChange={(event) => patch({ rpcUrl: event.target.value })} spellCheck={false} />
-              </Row>
-              <div className="opt-quick-btns">
-                <button className="opt-btn-ghost-sm" type="button" onClick={() => patch({ rpcUrl: PUBLICNODE_RPC_URL })}>PublicNode</button>
-                <button className="opt-btn-ghost-sm" type="button" onClick={() => patch({ rpcUrl: DRPC_RPC_URL })}>dRPC</button>
-                <button className="opt-btn-ghost-sm" type="button" onClick={() => patch({ rpcUrl: PUBLIC_TEST_RPC_URL })}>Mainnet</button>
-                <button className="opt-btn-ghost-sm" type="button" onClick={() => patch({ rpcUrl: HELIUS_RPC_TEMPLATE })}>Helius</button>
-                <button className="opt-btn-ghost-sm" type="button" onClick={() => patch({ rpcUrl: SHYFT_RPC_TEMPLATE })}>Shyft</button>
-                <button className="opt-btn-ghost-sm" type="button" onClick={testRpc}><Gauge size={12} /> Test active RPC</button>
-              </div>
-              {rpcStatus.text && <div className={`opt-result opt-result-${rpcStatus.state}`}>{rpcStatus.text}</div>}
-            </section>
-
-            <section className="opt-main-card">
-              <PanelTitle kicker="Jito" title="Low latency send" />
-              <Row label="Endpoint">
-                <input value={settings.jitoEndpoint} onChange={(event) => patch({ jitoEndpoint: event.target.value })} spellCheck={false} />
-              </Row>
-              <div className="opt-quick-btns">
-                <button className="opt-btn-ghost-sm" type="button" onClick={() => patch({ jitoEndpoint: JITO_MAINNET_TRANSACTION_URL })}>Mainnet default</button>
-              </div>
-              <ToggleRow label="Bundle only" sub="Reject if Jito cannot land the transaction" checked={settings.jitoBundleOnly} onChange={(value) => patch({ jitoBundleOnly: value })} />
-              <RangeField label="Auto fee max SOL" value={settings.autoFeeMax} min={0.0001} max={0.1} step={0.0001} onChange={(value) => patch({ autoFeeMax: value })} />
-              <RangeField label="Manual priority fee SOL" value={settings.priorityFee} min={0} max={0.1} step={0.0001} disabled={settings.autoFee} onChange={(value) => patch({ priorityFee: value })} />
-              <RangeField label="Manual Jito tip SOL" value={settings.jitoTip} min={0} max={0.1} step={0.0001} disabled={settings.autoFee} onChange={(value) => patch({ jitoTip: value })} />
-            </section>
-
-            <section className="opt-side-card">
-              <PanelTitle kicker="Providers" title="Free RPC keys" />
-              <ProviderLink href="https://dashboard.helius.dev/" label="Helius" note="Free developer tier" />
-              <ProviderLink href="https://shyft.to/get-api-key" label="Shyft" note="API key endpoint" />
-              <ProviderLink href="https://www.quicknode.com/" label="QuickNode" note="Free endpoint tier" />
-            </section>
-          </div>
-        )}
       </div>
 
-      <footer className="opt-footer">
+      {tab === 'trade' && <footer className="opt-footer">
         <CheckCircle2 size={13} className={saved ? 'opt-saved-icon' : 'opt-saved-icon opt-saved-dim'} />
         <span className="opt-footer-text">{saved ? 'All changes saved' : 'Unsaved changes'}</span>
         <button className="opt-btn-ghost" type="button" onClick={reset}><RotateCcw size={13} /> Reset</button>
-        <button className="opt-btn-primary" type="button" onClick={save}><Save size={13} /> Save</button>
-      </footer>
+        <button className="opt-btn-primary" type="button" onClick={save}><Save size={13} /> Save changes</button>
+      </footer>}
     </main>
   );
 }
@@ -493,29 +338,41 @@ function StatusTile(props: { label: string; value: string; state: 'ok' | 'warn' 
   );
 }
 
-function Segmented(props: { value: string; options: Array<{ value: string; label: string; note: string }>; onChange: (value: string) => void }) {
-  return (
-    <div className="opt-segmented">
-      {props.options.map((option) => (
-        <button key={option.value} type="button" className={`opt-segment${props.value === option.value ? ' opt-segment-active' : ''}`} onClick={() => props.onChange(option.value)}>
-          <span>{option.label}</span>
-          <small>{option.note}</small>
-        </button>
-      ))}
-    </div>
-  );
-}
+function PresetEditor(props: { label: string; note: string; values: number[]; suffix: string; step: number; max?: number; onChange: (values: number[]) => void }) {
+  const [drafts, setDrafts] = useState(() => props.values.map(String));
 
-function QuickList(props: { label: string; values: number[]; suffix: string; onChange: (value: string) => void }) {
+  useEffect(() => setDrafts(props.values.map(String)), [props.values]);
+
+  function update(index: number, draft: string) {
+    setDrafts((current) => current.map((value, itemIndex) => itemIndex === index ? draft : value));
+    const parsed = Number(draft);
+    if (!Number.isFinite(parsed) || parsed <= 0) return;
+    const next = [...props.values];
+    next[index] = props.max ? Math.min(props.max, parsed) : parsed;
+    props.onChange(next);
+  }
+
   return (
-    <div className="opt-quick-list">
-      <Row label={props.label}>
-        <input value={props.values.join(' ')} onChange={(event) => props.onChange(event.target.value)} />
-      </Row>
-      <div className="opt-pill-preview">
-        {props.values.map((value, index) => <span key={`${value}-${index}`} className="opt-pill">{value}{props.suffix}</span>)}
+    <fieldset className="opt-preset-editor">
+      <legend><strong>{props.label}</strong><span>{props.note}</span></legend>
+      <div className="opt-preset-grid">
+        {props.values.map((value, index) => (
+          <label key={index}>
+            <span>{index + 1}</span>
+            <input
+              type="number"
+              min={props.step}
+              max={props.max}
+              step={props.step}
+              value={drafts[index] ?? String(value)}
+              onChange={(event) => update(index, event.target.value)}
+              onBlur={() => setDrafts(props.values.map(String))}
+            />
+            <small>{props.suffix}</small>
+          </label>
+        ))}
       </div>
-    </div>
+    </fieldset>
   );
 }
 
@@ -524,15 +381,6 @@ function RangeField(props: { label: string; value: number; min: number; max: num
     <label className="opt-range-row">
       <span className="opt-label">{props.label}</span>
       <input type="number" min={props.min} max={props.max} step={props.step} value={props.value} disabled={props.disabled} onChange={(event) => props.onChange(Number(event.target.value))} />
-    </label>
-  );
-}
-
-function Row(props: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="opt-row">
-      <span className="opt-label">{props.label}</span>
-      {props.children}
     </label>
   );
 }
@@ -549,72 +397,33 @@ function ToggleRow(props: { label: string; sub: string; checked: boolean; onChan
   );
 }
 
-function ProviderLink(props: { href: string; label: string; note: string }) {
-  return (
-    <a className="opt-link-row" href={props.href} target="_blank" rel="noreferrer">
-      <span className="opt-link-label">{props.label}</span>
-      <span className="opt-link-note">{props.note}</span>
-      <ExternalLink size={12} />
-    </a>
-  );
+function shortAddress(value: string) {
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
 
-function FlowItem(props: { title: string; body: string }) {
-  return (
-    <div className="opt-flow-item">
-      <span className="opt-flow-title">{props.title}</span>
-      <span className="opt-flow-body">{props.body}</span>
-    </div>
-  );
-}
-
-function signerLabel(settings: TradeSettings, wallet: HotWalletResponse) {
-  if (settings.signerMode === 'wallet') return 'Browser wallet';
-  return wallet.unlocked ? `Hot ${shortKey(wallet.publicKey)}` : 'Hot wallet';
-}
-
-function getSpeedPreset(settings: TradeSettings): SpeedPreset {
-  if (settings.sendMode === 'jito' && settings.autoFeeLevel === 'turbo' && settings.jitoBundleOnly) return 'turbo';
-  if (settings.sendMode === 'jito') return 'fast';
-  return 'balanced';
-}
-
-function shortKey(value?: string) {
-  return value ? `${value.slice(0, 4)}...${value.slice(-4)}` : '';
-}
-
-function formatSol(value: number) {
-  if (value >= 1) return `${value.toFixed(3)} SOL`;
-  if (value >= 0.001) return `${value.toFixed(5)} SOL`;
-  return `${value.toFixed(9)} SOL`;
-}
-
-async function measureRpc(rpcUrl: string) {
-  const started = performance.now();
-  const health = await rpcCall<string>(rpcUrl, 'getHealth');
-  const slot = await rpcCall<number>(rpcUrl, 'getSlot');
-  return { health, slot, ms: Math.round(performance.now() - started) };
-}
-
-async function rpcCall<T>(rpcUrl: string, method: string): Promise<T> {
-  const response = await fetch(rpcUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: `trench-${method}`, method }),
+function evmAccountsRequest(message: unknown): Promise<EvmAccountsResponse> {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage(message, (response: unknown) => {
+        const runtimeError = chrome.runtime.lastError;
+        resolve((response as EvmAccountsResponse) ?? {
+          ok: false,
+          accounts: [],
+          activeAccountId: null,
+          selectedAccountIds: [],
+          error: runtimeError?.message ?? 'Extension unavailable',
+        });
+      });
+    } catch (error) {
+      resolve({
+        ok: false,
+        accounts: [],
+        activeAccountId: null,
+        selectedAccountIds: [],
+        error: error instanceof Error ? error.message : 'Extension unavailable',
+      });
+    }
   });
-  const payload = (await response.json().catch(() => null)) as { result?: T; error?: { message?: string } } | null;
-  if (!response.ok) throw new Error(payload?.error?.message ?? `HTTP ${response.status}`);
-  if (payload?.error) throw new Error(payload.error.message ?? 'RPC error');
-  if (payload?.result === undefined) throw new Error('No result');
-  return payload.result;
-}
-
-function hotWalletRequest(message: unknown): Promise<HotWalletResponse> {
-  return new Promise((resolve) => chrome.runtime.sendMessage(message, (response: unknown) => resolve(response as HotWalletResponse)));
-}
-
-function evmWalletRequest(message: unknown): Promise<EvmWalletResponse> {
-  return new Promise((resolve) => chrome.runtime.sendMessage(message, (response: unknown) => resolve((response as EvmWalletResponse) ?? { ok: false, hasWallet: false, unlocked: false })));
 }
 
 async function fetchEvmBalances(address: string): Promise<{ eth: number; usdg: number }> {
@@ -632,13 +441,11 @@ async function evmRpcCall(rpcUrl: string, method: string, params: unknown[]): Pr
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
   });
-  const payload = (await response.json().catch(() => null)) as { result?: string } | null;
-  return payload?.result ?? '';
-}
-
-function parseNumberList(value: string, fallback: number[], max: number) {
-  const parsed = value.split(/[\s,]+/).map((item) => Number(item.trim())).filter((item) => Number.isFinite(item) && item > 0).slice(0, max);
-  return parsed.length ? parsed : fallback;
+  if (!response.ok) throw new Error(`RPC HTTP ${response.status}`);
+  const payload = (await response.json().catch(() => null)) as { result?: string; error?: { message?: string } } | null;
+  if (payload?.error) throw new Error(payload.error.message ?? 'RPC error');
+  if (!payload?.result) throw new Error(`RPC ${method} returned no result`);
+  return payload.result;
 }
 
 createRoot(document.getElementById('root')!).render(<OptionsApp />);

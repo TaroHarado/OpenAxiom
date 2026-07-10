@@ -2,32 +2,13 @@
   "manifest_version": 3,
   "name": "Trench",
   "version": "0.1.0",
-  "description": "Trench — free, open-source trading terminal that overlays gmgn and Axiom. Quick-buy on every token card, local key signing, your own RPC, 0% platform fees.",
-  "permissions": ["storage", "activeTab", "scripting", "tabs"],
+  "description": "Robinhood Chain trading terminal for GMGN with local multi-wallet batch execution and 0% platform fees.",
+  "permissions": ["storage"],
   "host_permissions": [
-    "https://axiom.trade/*",
-    "https://*.axiom.trade/*",
     "https://gmgn.ai/*",
-    "https://*.helius-rpc.com/*",
-    "https://rpc.shyft.to/*",
-    "https://*.quiknode.pro/*",
-    "https://api.mainnet-beta.solana.com/*",
-    "https://solana-rpc.publicnode.com/*",
-    "https://solana.drpc.org/*",
-    "https://*.trench.trade/*",
-    "https://*.block-engine.jito.wtf/*",
-    "https://quote-api.jup.ag/*",
-    "https://lite-api.jup.ag/*",
-    "https://api.jup.ag/*",
-    "https://rpc.mainnet.chain.robinhood.com/*",
-    "https://robinhood-mainnet.g.alchemy.com/*"
+    "https://rpc.mainnet.chain.robinhood.com/*"
   ],
   "content_scripts": [
-    {
-      "matches": ["https://axiom.trade/*", "https://*.axiom.trade/*"],
-      "js": ["content.js"],
-      "run_at": "document_idle"
-    },
     {
       "matches": ["https://gmgn.ai/*"],
       "js": ["content.js"],
@@ -41,12 +22,16 @@
   "options_page": "options.html",
   "web_accessible_resources": [
     {
-      "resources": ["injected.js", "assets/*.js", "trenches.html"],
-      "matches": ["https://axiom.trade/*", "https://*.axiom.trade/*", "https://gmgn.ai/*"]
+      "resources": ["trenches.html"],
+      "matches": ["https://gmgn.ai/*"]
     }
   ],
   "action": {
     "default_title": "Trench",
     "default_popup": "popup.html"
+  },
+  "minimum_chrome_version": "116",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
   }
 }
