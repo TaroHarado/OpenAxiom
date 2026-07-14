@@ -7,6 +7,7 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: false,
+    codeSplitting: false,
     lib: {
       entry: 'src/background.ts',
       formats: ['es'],
@@ -14,7 +15,8 @@ export default defineConfig({
     },
     rollupOptions: {
       output: {
-        inlineDynamicImports: true
+        chunkFileNames: (chunk) => `chunks/${chunk.name.replace(/^_+/, 'chunk-')}-[hash].js`,
+        assetFileNames: 'assets/[name]-[hash][extname]'
       }
     }
   }
