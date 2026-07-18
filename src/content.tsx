@@ -4,32 +4,27 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
-  Coins,
   Edit3,
-  ExternalLink,
   Loader2,
   Percent,
   Settings,
-  Shield,
-  ShieldOff,
-  Wallet,
+  Users,
   X,
   Zap
 } from 'lucide-react';
-import { parseAxiomMintFromUrl, readAxiomTokenContext } from './axiom';
+import { isInvalidExtensionContext, selectQuickBuyAmount, stopOverlayEvent } from './contentControls';
 import { isGmgnRobinhood, readGmgnTokenContext } from './gmgn';
 import {
   defaultSettings,
   loadCollapsed,
   loadExtensionSettings,
   loadPosition,
-  PUBLIC_TEST_RPC_URL,
   saveCollapsed,
+  saveExtensionSettings,
   savePosition,
   saveSettings
 } from './storage';
-import type { EvmTradeResponse, EvmWalletResponse, PositionResponse, PositionState, ToastKind, TokenContext, TradeOrder, TradeResponse, TradeSettings, TradeSide } from './types';
-import type { WalletBridgeRequest, WalletBridgeResponse } from './types';
+import type { EvmAccountsResponse, EvmBatchTradeResponse, ToastKind, TokenContext, TradeOrder, TradeSettings, TradeSide } from './types';
 import styles from './styles.css?inline';
 
 declare global {
@@ -37,47 +32,47 @@ declare global {
     chrome?: {
       runtime?: {
         getURL?: (path: string) => string;
-        sendMessage?: (message: unknown, callback?: (response: TradeResponse | PositionResponse) => void) => void;
+        sendMessage?: (message: unknown, callback?: (response: unknown) => void) => void;
       };
     };
   }
 }
 
 const ROOT_ID = 'trench-shadow-root';
-const PULSE_STYLE_ID = 'trench-pulse-style';
-const PULSE_BUTTON_CLASS = 'trench-pulse-buy';
 const GMGN_STYLE_ID = 'trench-gmgn-style';
 const GMGN_BUTTON_CLASS = 'trench-gmgn-buy';
+const GMGN_CONTROL_CLASS = 'trench-gmgn-controls';
+const GMGN_AMOUNT_CLASS = 'trench-gmgn-amount';
 const GMGN_CARD_FLAG = 'data-trench-gmgn';
+const SETTINGS_CHANGE_EVENT = 'trench:settings-change';
 const EVM_ADDRESS_PATTERN = /0x[0-9a-fA-F]{40}/;
-const PNL_LEDGER_KEY = 'trench.pnl.v1';
+const GMGN_TOKEN_PATH = /\/robinhood\/token\/(?:[^/]*?_)?(0x[0-9a-fA-F]{40})/i;
+const RH_INFRA_ADDRESSES = new Set([
+  '0x0000000000000000000000000000000000000000',
+  '0x5fc5360d0400a0fd4f2af552add042d716f1d168',
+  '0x0bd7d308f8e1639fab988df18a8011f41eacad73',
+  '0x1f7d7550b1b028f7571e69a784071f0205fd2efa',
+  '0xcaf681a66d020601342297493863e78c959e5cb2',
+  '0x53bf6b0684ec7ef91e1387da3d1a1769bc5a6f77',
+]);
 const EVM_PNL_LEDGER_KEY = 'trench.evmPnl.v1';
 const TRADE_HISTORY_KEY = 'trench.tradeHistory.v1';
 const RH_RPC_URL = 'https://rpc.mainnet.chain.robinhood.com';
 const RH_USDG_ADDRESS = '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168';
 
-type PnlLedger = {
-  rawTokenAmount: string;
-  costBasisSol: number;
-  realizedPnlSol: number;
-  updatedAt: number;
-};
-
 type EvmPnlLedger = {
   rawTokenAmount: string;
-  costBasisUsdg: number;
-  realizedPnlUsdg: number;
+  costBasisEth: number;
+  realizedPnlEth: number;
   updatedAt: number;
 };
 
-type EvmBalancePair = { token: bigint; usdg: bigint };
+type EvmBalancePair = { token: bigint; eth: bigint; tokenDecimals: number };
 
 function mount() {
+  if (!isGmgnPage()) return;
   if (document.getElementById(ROOT_ID)) return;
   console.info('[Trench] content script mounted', window.location.href);
-  injectWalletBridge();
-  initPulseQuickBuy();
-  initGmgnQuickBuy();
 
   const host = document.createElement('div');
   host.id = ROOT_ID;
@@ -91,7 +86,83 @@ function mount() {
   const rootNode = document.createElement('div');
   shadow.appendChild(rootNode);
 
-  createRoot(rootNode).render(<TrenchOverlay />);
+  const root = createRoot(rootNode);
+  root.render(<TrenchController />);
+
+  window.addEventListener('beforeunload', () => {
+    root.unmount();
+    host.remove();
+  }, { once: true });
+}
+
+function TrenchController() {
+  const [settings, setSettings] = useState<TradeSettings | null>(null);
+  const [robinhoodPage, setRobinhoodPage] = useState(isGmgnRobinhood);
+
+  useEffect(() => {
+    const load = () => void loadExtensionSettings().then(setSettings);
+    const apply = (event: Event) => setSettings((event as CustomEvent<TradeSettings>).detail);
+    const applyStorageChange = (changes: Record<string, { newValue?: unknown }>, areaName: string) => {
+      if (areaName === 'local' && changes['trench.settings.v1']) load();
+    };
+    load();
+    window.addEventListener('focus', load);
+    window.addEventListener('pageshow', load);
+    document.addEventListener(SETTINGS_CHANGE_EVENT, apply);
+    globalThis.chrome?.storage?.onChanged?.addListener(applyStorageChange);
+    return () => {
+      window.removeEventListener('focus', load);
+      window.removeEventListener('pageshow', load);
+      document.removeEventListener(SETTINGS_CHANGE_EVENT, apply);
+      globalThis.chrome?.storage?.onChanged?.removeListener(applyStorageChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!settings?.showOnGmgn) return;
+    const syncRoute = () => setRobinhoodPage(isGmgnRobinhood());
+    syncRoute();
+    const observer = new MutationObserver(syncRoute);
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    window.addEventListener('popstate', syncRoute);
+    const intervalId = window.setInterval(syncRoute, 1000);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('popstate', syncRoute);
+      window.clearInterval(intervalId);
+    };
+  }, [settings?.showOnGmgn]);
+
+  useEffect(() => {
+    if (!settings?.showOnGmgn || !robinhoodPage) {
+      removeGmgnQuickBuyControls();
+      return;
+    }
+    return initGmgnQuickBuy();
+  }, [robinhoodPage, settings?.showOnGmgn]);
+
+  async function setVisible(showOnGmgn: boolean) {
+    const current = settings ?? await loadExtensionSettings();
+    const next = { ...current, showOnGmgn };
+    if (showOnGmgn) setRobinhoodPage(isGmgnRobinhood());
+    setSettings(next);
+    await saveExtensionSettings(next);
+    document.dispatchEvent(new CustomEvent<TradeSettings>(SETTINGS_CHANGE_EVENT, { detail: next }));
+  }
+
+  if (!settings) return null;
+
+  return (
+    <>
+      <label className={`tw-page-switch ${settings.showOnGmgn ? 'tw-page-switch-on' : ''}`}>
+        <span className="tw-page-switch-label">Trench</span>
+        <input type="checkbox" checked={settings.showOnGmgn} onChange={(event) => void setVisible(event.target.checked)} />
+        <span className="tw-page-switch-track" aria-hidden="true"><span /></span>
+        <strong>{settings.showOnGmgn ? 'On' : 'Off'}</strong>
+      </label>
+      {robinhoodPage && settings.showOnGmgn ? <TrenchOverlay /> : null}
+    </>
+  );
 }
 
 function TrenchOverlay() {
@@ -100,28 +171,46 @@ function TrenchOverlay() {
   const [position, setPosition] = useState(() => clampPosition(loadPosition()));
   const [collapsed, setCollapsed] = useState(() => loadCollapsed());
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [accountsOpen, setAccountsOpen] = useState(false);
   const [editAmounts, setEditAmounts] = useState(false);
   const [ordersOpen, setOrdersOpen] = useState(true);
-  const [token, setToken] = useState<TokenContext>(() => isGmgnRobinhood() ? readGmgnTokenContext() : readAxiomTokenContext());
+  const [token, setToken] = useState<TokenContext>(readGmgnTokenContext);
   const [orders, setOrders] = useState<TradeOrder[]>(() => loadTradeHistory());
   const [pendingSide, setPendingSide] = useState<TradeSide | null>(null);
-  const [confirmPending, setConfirmPending] = useState<{ side: TradeSide; amount: number } | null>(null);
-  const [wallet, setWallet] = useState<string | null>(null);
-  const [evmWallet, setEvmWallet] = useState<{ hasWallet: boolean; unlocked: boolean; address?: string }>({ hasWallet: false, unlocked: false });
+  const [evmWallet, setEvmWallet] = useState<{ hasWallet: boolean; address?: string }>({ hasWallet: false });
+  const [evmAccounts, setEvmAccounts] = useState<EvmAccountsResponse>({ ok: true, accounts: [], activeAccountId: null, selectedAccountIds: [] });
   const [evmEthBalance, setEvmEthBalance] = useState<number>(0);
   const [evmUsdgBalance, setEvmUsdgBalance] = useState<number>(0);
-  const [positionState, setPositionState] = useState<PositionState>(() => emptyPosition((isGmgnRobinhood() ? readGmgnTokenContext() : readAxiomTokenContext()).symbol));
-  const [pnlLedger, setPnlLedger] = useState<PnlLedger | null>(null);
   const [evmPnl, setEvmPnl] = useState<EvmPnlLedger | null>(null);
   const [evmTokenAmount, setEvmTokenAmount] = useState(0);
-  const [positionLoading, setPositionLoading] = useState(false);
-  const [positionError, setPositionError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ kind: ToastKind; text: string; signature?: string } | null>(null);
   const [flash, setFlash] = useState<ToastKind | null>(null);
   const [active, setActive] = useState(false);
   const dragRef = useRef({ dragging: false, dx: 0, dy: 0 });
+  const balanceSequence = useRef(0);
 
-  const displayedWallet = settingsState.signerMode === 'local' ? settingsState.localWalletPublicKey : wallet;
+  const walletReady = evmWallet.hasWallet;
+  const activeEvmAccount = evmAccounts.accounts.find((account) => account.id === evmAccounts.activeAccountId);
+
+  function refreshEvmBalances(address: string) {
+    const sequence = ++balanceSequence.current;
+    setEvmEthBalance(0);
+    setEvmUsdgBalance(0);
+    void Promise.all([
+      fetchEvmEthBalance(address),
+      fetchEvmRawBalance(address, RH_USDG_ADDRESS).then((value) => Number(value) / 1e6),
+    ]).then(([eth, usdg]) => {
+      if (sequence !== balanceSequence.current) return;
+      setEvmEthBalance(eth);
+      setEvmUsdgBalance(usdg);
+    }).catch(() => {});
+  }
+
+  function clearEvmBalances() {
+    balanceSequence.current += 1;
+    setEvmEthBalance(0);
+    setEvmUsdgBalance(0);
+  }
 
   useEffect(() => {
     void loadExtensionSettings().then((loaded) => {
@@ -131,102 +220,56 @@ function TrenchOverlay() {
   }, []);
 
   useEffect(() => {
+    let disposed = false;
     const refreshEvmWallet = () => {
-      chromeMessageEvm<{ ok: boolean; hasWallet: boolean; unlocked: boolean; address?: string }>({ type: 'TRENCH_EVM_WALLET_STATUS' })
+      chromeMessageEvm<EvmAccountsResponse>({ type: 'TRENCH_EVM_ACCOUNTS_LIST' })
         .then((r) => {
-          setEvmWallet({ hasWallet: r.hasWallet, unlocked: r.unlocked, address: r.address });
-          if (r.address) refreshEvmBalances(r.address);
+          if (disposed) return;
+          setEvmAccounts(r);
+          const active = r.accounts.find((account) => account.id === r.activeAccountId);
+          setEvmWallet({ hasWallet: Boolean(active), address: active?.address });
+          if (active?.address) refreshEvmBalances(active.address);
+          else clearEvmBalances();
         })
         .catch(() => {});
     };
-    const refreshEvmBalances = (address: string) => {
-      const RH_RPC = 'https://rpc.mainnet.chain.robinhood.com';
-      const USDG = '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168';
-      // ETH balance
-      fetch(RH_RPC, { method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_getBalance', params: [address, 'latest'], id: 1 }) })
-        .then(r => r.json()).then((d: { result?: string }) => {
-          if (d.result) setEvmEthBalance(Number(BigInt(d.result)) / 1e18);
-        }).catch(() => {});
-      // USDG balance (balanceOf)
-      const data = '0x70a08231' + address.slice(2).toLowerCase().padStart(64, '0');
-      fetch(RH_RPC, { method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_call', params: [{ to: USDG, data }, 'latest'], id: 2 }) })
-        .then(r => r.json()).then((d: { result?: string }) => {
-          if (d.result && d.result !== '0x') setEvmUsdgBalance(Number(BigInt(d.result)) / 1e6);
-        }).catch(() => {});
-    };
     refreshEvmWallet();
     window.addEventListener('focus', refreshEvmWallet);
-    return () => window.removeEventListener('focus', refreshEvmWallet);
+    window.addEventListener('pageshow', refreshEvmWallet);
+    const interval = window.setInterval(refreshEvmWallet, 5_000);
+    const storage = (window as unknown as { chrome?: { storage?: { onChanged?: { addListener?: (listener: (changes: Record<string, unknown>, areaName: string) => void) => void; removeListener?: (listener: (changes: Record<string, unknown>, areaName: string) => void) => void } } } }).chrome?.storage;
+    const onStorageChange = (changes: Record<string, unknown>, areaName: string) => {
+      if (areaName === 'local' && ('trench.evmAccounts.v2' in changes || 'trench.evmLegacyMigration.v1' in changes)) refreshEvmWallet();
+    };
+    storage?.onChanged?.addListener?.(onStorageChange);
+    return () => {
+      disposed = true;
+      window.removeEventListener('focus', refreshEvmWallet);
+      window.removeEventListener('pageshow', refreshEvmWallet);
+      window.clearInterval(interval);
+      storage?.onChanged?.removeListener?.(onStorageChange);
+    };
   }, []);
 
   useEffect(() => {
     const reloadSettings = () => {
       void loadExtensionSettings().then(setSettingsState);
     };
+    const applySettings = (event: Event) => {
+      setSettingsState((event as CustomEvent<TradeSettings>).detail);
+    };
     window.addEventListener('focus', reloadSettings);
     window.addEventListener('pageshow', reloadSettings);
+    document.addEventListener(SETTINGS_CHANGE_EVENT, applySettings);
     return () => {
       window.removeEventListener('focus', reloadSettings);
       window.removeEventListener('pageshow', reloadSettings);
+      document.removeEventListener(SETTINGS_CHANGE_EVENT, applySettings);
     };
   }, []);
 
   useEffect(() => {
-    setPositionState((current) => ({ ...current, tokenSymbol: token.symbol }));
-  }, [token.symbol]);
-
-  useEffect(() => {
-    if (!settingsReady || !displayedWallet) return;
-    let cancelled = false;
-
-    const refresh = async () => {
-      setPositionLoading(true);
-      const response = await getPosition(displayedWallet, token.mint, settingsState);
-      if (cancelled) return;
-      setPositionLoading(false);
-      if (!response.ok) {
-        setPositionError(response.error ?? 'Position unavailable');
-        return;
-      }
-      setPositionError(null);
-      setPositionState({
-        walletSol: response.walletSol ?? 0,
-        walletWsol: response.walletWsol ?? 0,
-        tokenAmount: response.tokenAmount ?? 0,
-        tokenRawAmount: response.tokenRawAmount ?? '0',
-        tokenSymbol: token.symbol,
-        costBasisSol: pnlLedger?.costBasisSol ?? 0,
-        realizedPnlSol: pnlLedger?.realizedPnlSol ?? 0,
-        pnlUsd: 0,
-        pnlSol: pnlLedger?.realizedPnlSol ?? 0
-      });
-    };
-
-    void refresh();
-    const refreshVisible = () => {
-      if (document.visibilityState === 'visible') void refresh();
-    };
-    window.addEventListener('focus', refreshVisible);
-    window.addEventListener('pageshow', refreshVisible);
-    document.addEventListener('visibilitychange', refreshVisible);
-    const interval = window.setInterval(() => void refresh(), 12_000);
-    return () => {
-      cancelled = true;
-      window.removeEventListener('focus', refreshVisible);
-      window.removeEventListener('pageshow', refreshVisible);
-      document.removeEventListener('visibilitychange', refreshVisible);
-      window.clearInterval(interval);
-    };
-  }, [displayedWallet, pnlLedger?.costBasisSol, pnlLedger?.realizedPnlSol, settingsReady, settingsState.rpcUrl, token.mint, token.symbol]);
-
-  useEffect(() => {
-    setPnlLedger(displayedWallet && token.mint ? loadPnlLedger(displayedWallet, token.mint) : null);
-  }, [displayedWallet, token.mint]);
-
-  useEffect(() => {
-    if (token.chain !== 'robinhood' || !evmWallet.address || !token.mint) {
+    if (!evmWallet.address || !token.mint) {
       setEvmPnl(null);
       setEvmTokenAmount(0);
       return;
@@ -234,19 +277,26 @@ function TrenchOverlay() {
     setEvmPnl(loadEvmPnlLedger(evmWallet.address, token.mint));
     let cancelled = false;
     void fetchEvmBalancePair(evmWallet.address, token.mint)
-      .then((pair) => { if (!cancelled) setEvmTokenAmount(Number(pair.token) / 1e18); })
+      .then((pair) => { if (!cancelled) setEvmTokenAmount(formatEvmTokenAmount(pair.token, pair.tokenDecimals)); })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [token.chain, token.mint, evmWallet.address]);
+  }, [token.mint, evmWallet.address]);
 
   useEffect(() => {
     if (!settingsReady) return;
     saveSettings(settingsState);
+    syncGmgnAmountControls(settingsState);
   }, [settingsReady, settingsState]);
 
   useEffect(() => {
     savePosition(position);
   }, [position]);
+
+  useEffect(() => {
+    const keepVisible = () => setPosition((current) => clampPosition(current));
+    window.addEventListener('resize', keepVisible);
+    return () => window.removeEventListener('resize', keepVisible);
+  }, []);
 
   useEffect(() => {
     saveCollapsed(collapsed);
@@ -264,7 +314,7 @@ function TrenchOverlay() {
   }, []);
 
   useEffect(() => {
-    const refresh = () => setToken(isGmgnRobinhood() ? readGmgnTokenContext() : readAxiomTokenContext());
+    const refresh = () => setToken(readGmgnTokenContext());
     refresh();
 
     const observer = new MutationObserver(refresh);
@@ -323,13 +373,13 @@ function TrenchOverlay() {
       const buyIndex = ['1', '2', '3', '4'].indexOf(key);
       if (buyIndex >= 0) {
         event.preventDefault();
-        void executeTrade('buy', settingsState.buyAmounts[buyIndex]);
+        void executeTrade('buy', settingsState.buyAmounts[buyIndex], event.isTrusted);
       }
 
       const sellIndex = ['q', 'w', 'e', 'r'].indexOf(key);
       if (sellIndex >= 0) {
         event.preventDefault();
-        void executeTrade('sell', settingsState.sellPercents[sellIndex]);
+        void executeTrade('sell', settingsState.sellPercents[sellIndex], event.isTrusted);
       }
     };
 
@@ -356,63 +406,63 @@ function TrenchOverlay() {
     setEditAmounts((v) => !v);
   }
 
-  async function executeTrade(side: TradeSide, amount: number) {
-    if (pendingSide) return;
-    if (settingsState.confirmation) {
-      setConfirmPending({ side, amount });
-      return;
-    }
+  async function executeTrade(side: TradeSide, amount: number, trusted: boolean) {
+    if (pendingSide || !trusted) return;
     await doExecuteTrade(side, amount);
   }
 
   async function doExecuteTrade(side: TradeSide, amount: number) {
     if (pendingSide) return;
+    if (!isGmgnRobinhood()) throw new Error('Robinhood Chain page required');
     setActive(true);
     setPendingSide(side);
     setToast({ kind: 'info', text: side === 'buy' ? 'Buying...' : 'Selling...' });
 
     try {
-      if (token.chain === 'robinhood') {
-        if (!evmWallet.hasWallet) throw new Error('Import EVM wallet in Settings first');
-        if (!evmWallet.unlocked) throw new Error('EVM wallet locked — re-open Settings to unlock');
-        const rhAddress = evmWallet.address;
-        const before = rhAddress && token.mint ? await fetchEvmBalancePair(rhAddress, token.mint).catch(() => null) : null;
-        await runEvmTrade(side, amount, token.mint, settingsState, side === 'buy' ? (evmUsdgBalance >= amount ? 'USDG' : 'ETH') : 'USDG');
-        setFlash('success');
-        setToast({ kind: 'success', text: side === 'buy' ? 'Buy filled' : 'Sell filled' });
-        addTradeHistory(setOrders, {
-          side,
-          mint: token.mint,
-          wallet: rhAddress ?? '',
-          size: formatTradeValue(side, amount),
-          status: 'Sent'
-        });
-        if (rhAddress && token.mint && before) {
-          void refreshEvmPnlAfterTrade(rhAddress, token.mint, side, before, setEvmPnl, setEvmTokenAmount);
+      if (!evmWallet.hasWallet) throw new Error('Create or import a wallet in Options');
+      const rhAddress = activeEvmAccount?.address;
+      const accountIds = evmAccounts.selectedAccountIds.length ? evmAccounts.selectedAccountIds : (evmAccounts.activeAccountId ? [evmAccounts.activeAccountId] : []);
+      const beforeBalances = new Map<string, EvmBalancePair>();
+      if (token.mint) {
+        await Promise.all(accountIds.map(async (accountId) => {
+          const account = evmAccounts.accounts.find((item) => item.id === accountId);
+          if (!account) return;
+          const balance = await fetchEvmBalancePair(account.address, token.mint!).catch(() => null);
+          if (balance) beforeBalances.set(accountId, balance);
+        }));
+      }
+      const batch = await runEvmBatchTrade(side, amount, token.mint, settingsState, accountIds);
+      const filled = batch.results.filter((result) => result.ok).length;
+      const failed = batch.results.length - filled;
+      setFlash(failed ? 'error' : 'success');
+      setToast({ kind: failed ? 'error' : 'success', text: `${side === 'buy' ? 'Buy' : 'Sell'} ${filled}/${batch.results.length} wallets${failed ? ` · ${failed} failed` : ''}` });
+      batch.results.forEach((result) => addTradeHistory(setOrders, {
+        side,
+        mint: token.mint,
+        wallet: result.address,
+        signature: result.hash,
+        summary: result.name,
+        error: result.error,
+        size: formatTradeValue(side, amount),
+        status: result.ok ? 'Sent' : 'Failed'
+      }));
+      if (token.mint) {
+        for (const result of batch.results) {
+          const before = beforeBalances.get(result.accountId);
+          if (result.ok && before) {
+            void refreshEvmPnlAfterTrade(result.address, token.mint, side, before, (ledger) => {
+              if (result.address.toLowerCase() === rhAddress?.toLowerCase()) setEvmPnl(ledger);
+            }, (amount) => {
+              if (result.address.toLowerCase() === rhAddress?.toLowerCase()) setEvmTokenAmount(amount);
+            }, refreshEvmBalances);
+          }
         }
-      } else {
-        const result = await runTrade(side, amount, token.mint, settingsState, wallet);
-        setWallet(result.publicKey);
-        setFlash('success');
-        setToast({ kind: 'success', text: side === 'buy' ? 'Buy filled' : 'Sell filled', signature: result.response.signature });
-        addTradeHistory(setOrders, {
-          side,
-          mint: token.mint,
-          wallet: result.publicKey,
-          route: result.prepared.route,
-          signature: result.response.signature,
-          summary: result.prepared.quoteSummary,
-          size: formatTradeValue(side, amount),
-          status: 'Sent'
-        });
-        if (token.mint && result.before?.ok) void refreshPnlAfterTrade(result.publicKey, token.mint, side, result.before, settingsState, setPnlLedger, setPositionState);
       }
     } catch (error) {
-      const publicKey = settingsState.signerMode === 'local' ? settingsState.localWalletPublicKey : wallet ?? '';
       addTradeHistory(setOrders, {
         side,
         mint: token.mint,
-        wallet: publicKey,
+        wallet: activeEvmAccount?.address ?? '',
         error: error instanceof Error ? error.message : 'RPC timeout',
         size: formatTradeValue(side, amount),
         status: 'Failed'
@@ -429,7 +479,11 @@ function TrenchOverlay() {
       <button
         className="tw-compact"
         style={{ transform: `translate3d(${position.x}px, ${position.y}px, 0)` }}
-        onClick={() => setCollapsed(false)}
+        onPointerDown={stopOverlayEvent}
+        onClick={(event) => {
+          stopOverlayEvent(event);
+          setCollapsed(false);
+        }}
         onFocus={() => setActive(true)}
       >
         <Zap size={15} />
@@ -442,23 +496,27 @@ function TrenchOverlay() {
     <section
       className={`tw-widget ${flash ? `tw-flash-${flash}` : ''}`}
       style={{ transform: `translate3d(${position.x}px, ${position.y}px, 0)` }}
-      onPointerDown={() => setActive(true)}
+      onPointerDown={(event) => {
+        stopOverlayEvent(event);
+        setActive(true);
+      }}
+      onClick={stopOverlayEvent}
       onFocus={() => setActive(true)}
     >
       <header className="tw-header" onPointerDown={startDrag}>
         <div className="tw-brand">
           <div className="tw-logo">TR</div>
           <div className="tw-title-wrap">
-            <div className="tw-title">{token.symbol && token.symbol !== 'TOKEN' ? token.symbol : 'Trench'}</div>
-            <div className="tw-mint" title={token.mint ?? 'Token not detected'}>
-              {token.mint ? shortMint(token.mint) : '—'}
+            <div className="tw-eyebrow">Robinhood Chain</div>
+            <div className="tw-title-line">
+              <div className="tw-title">{token.symbol && token.symbol !== 'TOKEN' ? token.symbol : 'Trench'}</div>
+              <div className="tw-mint" title={token.mint ?? 'Token not detected'}>{token.mint ? shortMint(token.mint) : '—'}</div>
             </div>
           </div>
         </div>
         <nav className="tw-header-actions tw-no-drag" aria-label="Trench actions">
-          {isPublicRpc(settingsState) ? <span className="tw-rpc-warn" title="Public RPC — rate limited">PUB</span> : null}
-          <IconButton label={walletButtonLabel(settingsState, wallet)} onClick={() => connectBrowserWallet(settingsState, setWallet, setToast)}>
-            <Wallet size={14} />
+          <IconButton label="Select accounts" active={accountsOpen} onClick={() => setAccountsOpen((value) => !value)}>
+            <Users size={14} />
           </IconButton>
           <IconButton label={editAmounts ? 'Done editing' : 'Edit amounts'} active={editAmounts} onClick={toggleEditAmounts}>
             <Edit3 size={14} />
@@ -472,69 +530,86 @@ function TrenchOverlay() {
 
       <main className="tw-body">
 
+        {accountsOpen ? (
+          <AccountPicker accounts={evmAccounts} onChange={async (message) => {
+            const next = await chromeMessageEvm<EvmAccountsResponse>(message);
+            setEvmAccounts(next);
+            const active = next.accounts.find((account) => account.id === next.activeAccountId);
+            setEvmWallet({ hasWallet: Boolean(active), address: active?.address });
+            if (active?.address) refreshEvmBalances(active.address);
+            else clearEvmBalances();
+          }} />
+        ) : null}
+
+        <section className="tw-command-strip" aria-label="Trading status">
+          <div className={`tw-status-tile ${walletReady ? 'tw-status-ready' : 'tw-status-warn'}`}>
+            <span>Wallet</span>
+            <strong>{walletReady ? activeEvmAccount?.name ?? shortMint(evmWallet.address ?? '') : 'Not ready'}</strong>
+          </div>
+          <div className="tw-status-tile">
+            <span>Balance</span>
+            <strong>{evmEthBalance.toFixed(4)} ETH</strong>
+          </div>
+          <div className="tw-status-tile">
+            <span>Batch</span>
+            <strong>{evmAccounts.selectedAccountIds.length} wallets</strong>
+          </div>
+        </section>
+
         {settingsOpen ? (
           <SettingsPanel
             settings={settingsState}
             onChange={patchSettings}
             evmWallet={evmWallet}
-            onEvmWalletImport={async (pk: string) => {
-              const r = await chromeMessageEvm<{ ok: boolean; address?: string; error?: string }>({ type: 'TRENCH_EVM_WALLET_IMPORT', privateKey: pk });
-              if (r.ok) {
-                setEvmWallet({ hasWallet: true, unlocked: true, address: r.address });
-                void loadExtensionSettings().then(setSettingsState);
-              }
-              return r;
-            }}
-            onEvmWalletForget={async () => {
-              await chromeMessageEvm<{ ok: boolean }>({ type: 'TRENCH_EVM_WALLET_FORGET' });
-              setEvmWallet({ hasWallet: false, unlocked: false, address: undefined });
-            }}
             onClearHistory={() => {
               localStorage.removeItem(TRADE_HISTORY_KEY);
               setOrders([]);
               setToast({ kind: 'info', text: 'Trade history cleared' });
             }}
             onClearPnl={() => {
-              localStorage.removeItem(PNL_LEDGER_KEY);
-              setPnlLedger(null);
+              localStorage.removeItem(EVM_PNL_LEDGER_KEY);
+              setEvmPnl(null);
               setToast({ kind: 'info', text: 'Local PnL cleared' });
             }}
           />
         ) : null}
 
-        <TradeSection
+            <TradeSection
           side="buy"
           title="Buy"
-          meta={token.chain === 'robinhood'
-            ? <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#aaa' }}>
-                <span style={{ color: '#ccff00' }}>USDG</span> {evmUsdgBalance.toFixed(2)}
+          meta={<span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#aaa' }}>
+                <span style={{ color: '#14f195' }}>USDG</span> {evmUsdgBalance.toFixed(2)}
                 <span style={{ color: '#666' }}>|</span>
                 <span style={{ color: '#ccc' }}>ETH</span> {evmEthBalance.toFixed(4)}
-              </span>
-            : <><SolanaMark /> {positionLoading ? '...' : positionState.walletSol.toFixed(4)}{positionState.walletWsol > 0 ? `+${positionState.walletWsol.toFixed(4)}w` : ''} SOL</>}
+              </span>}
           buttons={settingsState.buyAmounts}
+              unit="ETH"
           selected={settingsState.selectedBuyAmount}
           pending={pendingSide === 'buy'}
           settings={settingsState}
           editMode={editAmounts}
-          onSelect={(value) => patchSettings({ selectedBuyAmount: value })}
-          onExecute={(value) => executeTrade('buy', value)}
+              onSelect={(value) => patchSettings({ selectedBuyAmount: value })}
+              onPrewarm={() => token.mint && chromeMessageEvm<{ ok: boolean }>({ type: 'TRENCH_EVM_PREWARM_ROUTE', tokenAddress: token.mint }).catch(() => {})}
+              onExecute={(value, trusted) => executeTrade('buy', value, trusted)}
           onEditValue={(index, value) => {
             const next = [...settingsState.buyAmounts];
+            const previous = next[index];
             next[index] = value;
-            patchSettings({ buyAmounts: next });
+            patchSettings({
+              buyAmounts: next,
+              selectedBuyAmount: settingsState.selectedBuyAmount === previous
+                ? value
+                : next.includes(settingsState.selectedBuyAmount) ? settingsState.selectedBuyAmount : next[0],
+            });
           }}
         />
-
-        <div className="tw-divider" />
 
         <TradeSection
           side="sell"
           title="Sell"
-          meta={token.chain === 'robinhood'
-            ? (() => {
-                const rpnl = evmPnl?.realizedPnlUsdg ?? 0;
-                const cost = evmPnl?.costBasisUsdg ?? 0;
+          meta={(() => {
+                const rpnl = evmPnl?.realizedPnlEth ?? 0;
+                const cost = evmPnl?.costBasisEth ?? 0;
                 const pct = cost > 0 ? (rpnl / cost) * 100 : null;
                 const cls = rpnl > 0 ? 'tw-positive' : rpnl < 0 ? 'tw-negative' : 'tw-muted';
                 return (
@@ -542,41 +617,32 @@ function TrenchOverlay() {
                     {evmTokenAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })} {token.symbol}
                     {' / '}
                     <span className={cls}>
-                      {rpnl >= 0 ? '+' : ''}${rpnl.toFixed(2)}
+                      {rpnl >= 0 ? '+' : ''}{rpnl.toFixed(6)} ETH
                       {pct !== null ? ` (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)` : ''}
-                    </span>
-                  </span>
-                );
-              })()
-            : (() => {
-                const rpnl = positionState.realizedPnlSol;
-                const cost = positionState.costBasisSol;
-                const pct = cost > 0 ? (rpnl / cost) * 100 : null;
-                const cls = rpnl > 0 ? 'tw-positive' : rpnl < 0 ? 'tw-negative' : 'tw-muted';
-                return (
-                  <span className="tw-position-meta">
-                    {positionState.tokenAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })} {positionState.tokenSymbol}
-                    {' / '}
-                    <span className={cls}>
-                      {positionError
-                        ? positionError
-                        : <>{rpnl >= 0 ? '+' : ''}{rpnl.toFixed(4)} SOL{pct !== null ? ` (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)` : ''}</>}
                     </span>
                   </span>
                 );
               })()
           }
           buttons={settingsState.sellPercents}
+              unit="of position"
           selected={settingsState.selectedSellPercent}
           pending={pendingSide === 'sell'}
           settings={settingsState}
           editMode={editAmounts}
-          onSelect={(value) => patchSettings({ selectedSellPercent: value })}
-          onExecute={(value) => executeTrade('sell', value)}
+              onSelect={(value) => patchSettings({ selectedSellPercent: value })}
+              onPrewarm={() => token.mint && chromeMessageEvm<{ ok: boolean }>({ type: 'TRENCH_EVM_PREWARM_ROUTE', tokenAddress: token.mint, side: 'sell' }).catch(() => {})}
+              onExecute={(value, trusted) => executeTrade('sell', value, trusted)}
           onEditValue={(index, value) => {
             const next = [...settingsState.sellPercents];
+            const previous = next[index];
             next[index] = value;
-            patchSettings({ sellPercents: next });
+            patchSettings({
+              sellPercents: next,
+              selectedSellPercent: settingsState.selectedSellPercent === previous
+                ? value
+                : next.includes(settingsState.selectedSellPercent) ? settingsState.selectedSellPercent : next[0],
+            });
           }}
         />
 
@@ -596,7 +662,7 @@ function TrenchOverlay() {
                     <span className="tw-order-size">{order.size}</span>
                     <span className={`tw-status tw-status-${order.status.toLowerCase()}`}>{order.status}</span>
                     {order.signature ? (
-                      <a className="tw-cancel" href={`https://solscan.io/tx/${order.signature}`} target="_blank" rel="noreferrer">View</a>
+                      <a className="tw-cancel" href={tradeExplorerUrl(order)} target="_blank" rel="noreferrer">View</a>
                     ) : (
                       <span className="tw-cancel tw-disabled">{formatTime(order.createdAt)}</span>
                     )}
@@ -611,23 +677,6 @@ function TrenchOverlay() {
       </main>
 
       {toast ? <Toast toast={toast} /> : null}
-      {confirmPending ? (
-        <div className="tw-confirm-overlay">
-          <div className="tw-confirm-text">
-            {confirmPending.side === 'buy'
-              ? `Buy ${confirmPending.amount} SOL?`
-              : `Sell ${confirmPending.amount}%?`}
-          </div>
-          <div className="tw-confirm-actions">
-            <button className="tw-confirm-cancel" type="button" onClick={() => setConfirmPending(null)}>Cancel</button>
-            <button className={`tw-confirm-ok tw-confirm-${confirmPending.side}`} type="button" onClick={() => {
-              const { side, amount } = confirmPending;
-              setConfirmPending(null);
-              void doExecuteTrade(side, amount);
-            }}>Confirm</button>
-          </div>
-        </div>
-      ) : null}
     </section>
   );
 }
@@ -637,15 +686,17 @@ function TradeSection(props: {
   title: string;
   meta: React.ReactNode;
   buttons: number[];
+  unit: string;
   selected: number;
   pending: boolean;
   settings: TradeSettings;
   editMode?: boolean;
   onSelect: (value: number) => void;
-  onExecute: (value: number) => void;
+  onPrewarm?: () => void;
+  onExecute: (value: number, trusted: boolean) => void;
   onEditValue?: (index: number, value: number) => void;
 }) {
-  const { side, title, meta, buttons, selected, pending, settings, editMode, onSelect, onExecute, onEditValue } = props;
+  const { side, title, meta, buttons, unit, selected, pending, settings, editMode, onSelect, onPrewarm, onExecute, onEditValue } = props;
 
   return (
     <section className={`tw-trade tw-trade-${side}`}>
@@ -675,14 +726,18 @@ function TradeSection(props: {
               className={`tw-quick tw-quick-${side} ${value === selected ? 'tw-selected' : ''}`}
               type="button"
               key={value}
-              onClick={() => {
+              onPointerEnter={onPrewarm}
+              onClick={(event) => {
                 onSelect(value);
-                onExecute(value);
+                onExecute(value, event.nativeEvent.isTrusted);
               }}
               disabled={pending}
             >
-              {pending && value === selected ? <Loader2 className="tw-spin" size={13} /> : null}
-              {pending && value === selected ? (side === 'buy' ? 'Buying...' : 'Selling...') : formatTradeValue(side, value)}
+              <span className="tw-quick-value">
+                {pending && value === selected ? <Loader2 className="tw-spin" size={13} /> : null}
+                {pending && value === selected ? (side === 'buy' ? 'Buying...' : 'Selling...') : formatTradeValue(side, value)}
+              </span>
+              <small>{unit}</small>
             </button>
           )
         )}
@@ -692,15 +747,40 @@ function TradeSection(props: {
         <span className="tw-stat" title="Slippage tolerance">
           <Percent size={11} /> {settings.slippage}%
         </span>
-        <span className="tw-stat" title={settings.autoFee ? `Auto priority fee (${settings.autoFeeLevel})` : 'Priority fee'}>
-          <Zap size={11} /> {settings.autoFee ? settings.autoFeeLevel.charAt(0).toUpperCase() + settings.autoFeeLevel.slice(1) : settings.priorityFee}
+        <span className="tw-stat" title="Every transaction is simulated before submission">
+          <CheckCircle2 size={11} /> Simulated
         </span>
-        <span className="tw-stat" title="Jito tip">
-          <Coins size={11} /> {settings.jitoTip}
+        <span className="tw-stat" title="Robinhood Chain">
+          <Zap size={11} /> Native ETH
         </span>
-        <span className={`tw-stat ${settings.protection ? 'tw-stat-on' : 'tw-stat-off'}`} title={settings.protection ? 'MEV protection on' : 'MEV protection off'}>
-          {settings.protection ? <Shield size={11} /> : <ShieldOff size={11} />} {settings.protection ? 'On' : 'Off'}
-        </span>
+      </div>
+    </section>
+  );
+}
+
+function AccountPicker(props: { accounts: EvmAccountsResponse; onChange: (message: unknown) => Promise<void> }) {
+  const { accounts, onChange } = props;
+  return (
+    <section className="tw-account-picker">
+      <div className="tw-account-picker-head">
+        <div><strong>Execution wallets</strong><span>{accounts.selectedAccountIds.length} selected for batch</span></div>
+        <button type="button" onClick={() => window.open(window.chrome?.runtime?.getURL?.('options.html'), '_blank')}>Manage</button>
+      </div>
+      <div className="tw-account-picker-list">
+        {accounts.accounts.map((account) => (
+          <div className={`tw-account-pick-row${account.active ? ' tw-account-pick-active' : ''}`} key={account.id}>
+            <button className="tw-account-radio" type="button" title="Make active" onClick={() => onChange({ type: 'TRENCH_EVM_ACCOUNT_SET_ACTIVE', accountId: account.id })}><span /></button>
+            <button className="tw-account-identity" type="button" onClick={() => onChange({ type: 'TRENCH_EVM_ACCOUNT_SET_ACTIVE', accountId: account.id })}><strong>{account.name}</strong><small>{shortMint(account.address)}</small></button>
+            <label className="tw-account-check"><input type="checkbox" checked={account.selected} onChange={() => {
+              const accountIds = account.selected
+                ? accounts.selectedAccountIds.filter((id) => id !== account.id)
+                : [...accounts.selectedAccountIds, account.id];
+              if (!accountIds.length) return;
+              void onChange({ type: 'TRENCH_EVM_ACCOUNTS_SET_SELECTED', accountIds });
+            }} /><span>{account.selected ? 'Batch' : 'Add'}</span></label>
+          </div>
+        ))}
+        {!accounts.accounts.length ? <div className="tw-account-picker-empty">No accounts. Open Manage to create one.</div> : null}
       </div>
     </section>
   );
@@ -709,121 +789,56 @@ function TradeSection(props: {
 function SettingsPanel(props: {
   settings: TradeSettings;
   onChange: (patch: Partial<TradeSettings>) => void;
-  evmWallet: { hasWallet: boolean; unlocked: boolean; address?: string };
-  onEvmWalletImport: (pk: string) => Promise<{ ok: boolean; error?: string }>;
-  onEvmWalletForget: () => Promise<void>;
+  evmWallet: { hasWallet: boolean; address?: string };
   onClearHistory: () => void;
   onClearPnl: () => void;
 }) {
-  const { settings, onChange, evmWallet, onEvmWalletImport, onEvmWalletForget, onClearHistory, onClearPnl } = props;
-  const [evmKey, setEvmKey] = useState('');
-  const [evmErr, setEvmErr] = useState('');
-  const [evmLoading, setEvmLoading] = useState(false);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-
-  async function handleEvmImport() {
-    const pk = evmKey.trim();
-    if (!/^0x[0-9a-fA-F]{64}$/.test(pk)) { setEvmErr('Invalid private key (must be 0x + 64 hex chars)'); return; }
-    setEvmLoading(true); setEvmErr('');
-    const r = await onEvmWalletImport(pk);
-    setEvmLoading(false);
-    if (!r.ok) { setEvmErr(r.error ?? 'Import failed'); return; }
-    setEvmKey('');
-  }
+  const { settings, onChange, evmWallet, onClearHistory, onClearPnl } = props;
 
   return (
     <section className="tw-settings-panel">
-      <div className="tw-settings-title">Wallets</div>
+      <div className="tw-settings-title">Wallet</div>
       <div className="tw-wallet-manager">
         <div className="tw-wallet-row">
-          <span className="tw-wallet-label">Solana</span>
-          {settings.localWalletPublicKey ? (
-            <span className="tw-wallet-addr">{settings.localWalletPublicKey.slice(0,6)}…{settings.localWalletPublicKey.slice(-4)}</span>
-          ) : (
-            <span className="tw-wallet-empty">No wallet — import in Options</span>
-          )}
-          <span className={`tw-evm-dot ${settings.localWalletPublicKey ? 'tw-evm-ok' : ''}`} />
-        </div>
-        <div className="tw-wallet-row">
-          <span className="tw-wallet-label">RH Chain</span>
+          <span className="tw-wallet-label">Robinhood Chain</span>
           {evmWallet.hasWallet ? (
             <>
-              <span className="tw-wallet-addr">{evmWallet.address ? `${evmWallet.address.slice(0,6)}…${evmWallet.address.slice(-4)}` : 'Locked'}</span>
-              <span className={`tw-evm-dot ${evmWallet.unlocked ? 'tw-evm-ok' : 'tw-evm-locked'}`} />
-              <button className="tw-btn-ghost-xs" type="button" onClick={onEvmWalletForget}>Forget</button>
+              <span className="tw-wallet-addr">{evmWallet.address ? `${evmWallet.address.slice(0,6)}…${evmWallet.address.slice(-4)}` : 'No active wallet'}</span>
+              <span className="tw-evm-dot tw-evm-ok" />
             </>
           ) : (
-            <>
-              <input
-                className="tw-evm-input"
-                type="password"
-                placeholder="0x private key"
-                value={evmKey}
-                onChange={(e) => setEvmKey(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') void handleEvmImport(); }}
-                disabled={evmLoading}
-              />
-              <button className="tw-btn-action-sm" type="button" onClick={handleEvmImport} disabled={evmLoading}>
-                {evmLoading ? '…' : 'Import'}
-              </button>
-            </>
+            <span className="tw-wallet-empty">Create or import in Options</span>
           )}
         </div>
-        {evmErr && <div className="tw-evm-error">{evmErr}</div>}
+        <button className="tw-btn-action-sm" type="button" onClick={() => window.open(window.chrome?.runtime?.getURL?.('options.html'), '_blank')}>Manage accounts</button>
       </div>
 
       <div className="tw-settings-group"><span><span className="tw-group-dot">·</span> Trade</span></div>
       <div className="tw-settings-grid">
-        <label>
-          <span>Buy amounts</span>
-          <input value={settings.buyAmounts.join(' ')} onChange={(event) => onChange({ buyAmounts: parseNumberList(event.target.value, defaultSettings.buyAmounts) })} />
-        </label>
-        <label>
-          <span>Sell %</span>
-          <input value={settings.sellPercents.join(' ')} onChange={(event) => onChange({ sellPercents: parseNumberList(event.target.value, defaultSettings.sellPercents) })} />
-        </label>
+        <PresetFields
+          label="Buy amounts"
+          values={settings.buyAmounts}
+          suffix="ETH"
+          step={0.0001}
+          onChange={(buyAmounts) => onChange({
+            buyAmounts,
+            selectedBuyAmount: buyAmounts.includes(settings.selectedBuyAmount) ? settings.selectedBuyAmount : buyAmounts[0],
+          })}
+        />
+        <PresetFields
+          label="Sell position"
+          values={settings.sellPercents}
+          suffix="%"
+          step={1}
+          max={100}
+          onChange={(sellPercents) => onChange({
+            sellPercents,
+            selectedSellPercent: sellPercents.includes(settings.selectedSellPercent) ? settings.selectedSellPercent : sellPercents[0],
+          })}
+        />
         <label>
           <span>Slippage %</span>
           <input type="number" value={settings.slippage} onChange={(event) => onChange({ slippage: Number(event.target.value) })} />
-        </label>
-        <label>
-          <span>Engine</span>
-          <select value={settings.executionMode} onChange={(event) => onChange({ executionMode: event.target.value as TradeSettings['executionMode'] })}>
-            <option value="jupiter">Jupiter</option>
-            <option value="pump">Pump</option>
-            <option value="auto">Auto</option>
-          </select>
-        </label>
-        <label>
-          <span>Priority fee</span>
-          <input type="number" step="0.001" value={settings.priorityFee} disabled={settings.autoFee} onChange={(event) => onChange({ priorityFee: Number(event.target.value) })} />
-        </label>
-        <label>
-          <span>Auto level</span>
-          <select value={settings.autoFeeLevel} disabled={!settings.autoFee} onChange={(event) => onChange({ autoFeeLevel: event.target.value as TradeSettings['autoFeeLevel'] })}>
-            <option value="normal">Normal</option>
-            <option value="fast">Fast</option>
-            <option value="turbo">Turbo</option>
-          </select>
-        </label>
-        <label>
-          <span>Signer</span>
-          <select value={settings.signerMode} onChange={(event) => onChange({ signerMode: event.target.value as TradeSettings['signerMode'] })}>
-            <option value="wallet">Browser wallet</option>
-            <option value="local">Local hot wallet</option>
-          </select>
-        </label>
-        <label className="tw-toggle-row">
-          <span>Auto fee</span>
-          <input type="checkbox" checked={settings.autoFee} onChange={(event) => onChange({ autoFee: event.target.checked })} />
-        </label>
-        <label className="tw-toggle-row">
-          <span>Protection</span>
-          <input type="checkbox" checked={settings.protection} onChange={(event) => onChange({ protection: event.target.checked })} />
-        </label>
-        <label className="tw-toggle-row">
-          <span>Confirm</span>
-          <input type="checkbox" checked={settings.confirmation} onChange={(event) => onChange({ confirmation: event.target.checked })} />
         </label>
         <label className="tw-toggle-row">
           <span>Hotkeys</span>
@@ -831,51 +846,49 @@ function SettingsPanel(props: {
         </label>
       </div>
 
-      <button className="tw-settings-group" type="button" onClick={() => setAdvancedOpen((v) => !v)}>
-        <span><span className="tw-group-dot">·</span> Advanced</span>
-        {advancedOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-      </button>
-      {advancedOpen ? (
-        <div className="tw-settings-grid">
-          <label>
-            <span>Jito tip</span>
-            <input type="number" step="0.001" value={settings.jitoTip} disabled={settings.autoFee} onChange={(event) => onChange({ jitoTip: Number(event.target.value) })} />
-          </label>
-          <label>
-            <span>Auto max</span>
-            <input type="number" step="0.0001" value={settings.autoFeeMax} disabled={!settings.autoFee} onChange={(event) => onChange({ autoFeeMax: Number(event.target.value) })} />
-          </label>
-          <label>
-            <span>Send mode</span>
-            <select value={settings.sendMode} onChange={(event) => onChange({ sendMode: event.target.value as TradeSettings['sendMode'] })}>
-              <option value="rpc">RPC preflight</option>
-              <option value="jito">Jito low latency</option>
-            </select>
-          </label>
-          <label className="tw-toggle-row">
-            <span>Jito bundleOnly</span>
-            <input type="checkbox" checked={settings.jitoBundleOnly} onChange={(event) => onChange({ jitoBundleOnly: event.target.checked })} />
-          </label>
-          <label style={{ gridColumn: '1 / -1' }}>
-            <span>RPC URL</span>
-            <input value={settings.rpcUrl} onChange={(event) => onChange({ rpcUrl: event.target.value })} />
-          </label>
-          <label style={{ gridColumn: '1 / -1' }}>
-            <span>Jito endpoint</span>
-            <input value={settings.jitoEndpoint} onChange={(event) => onChange({ jitoEndpoint: event.target.value })} />
-          </label>
-          <label style={{ gridColumn: '1 / -1' }}>
-            <span>Local pubkey</span>
-            <input value={settings.localWalletPublicKey} readOnly />
-          </label>
-        </div>
-      ) : null}
-
       <div className="tw-settings-actions">
         <button type="button" onClick={onClearHistory}>Clear history</button>
         <button type="button" onClick={onClearPnl}>Clear PnL</button>
       </div>
     </section>
+  );
+}
+
+function PresetFields(props: { label: string; values: number[]; suffix: string; step: number; max?: number; onChange: (values: number[]) => void }) {
+  const [drafts, setDrafts] = useState(() => props.values.map(String));
+
+  useEffect(() => setDrafts(props.values.map(String)), [props.values]);
+
+  function update(index: number, draft: string) {
+    setDrafts((current) => current.map((value, itemIndex) => itemIndex === index ? draft : value));
+    const parsed = Number(draft);
+    if (!Number.isFinite(parsed) || parsed <= 0) return;
+    const next = [...props.values];
+    next[index] = props.max ? Math.min(props.max, parsed) : parsed;
+    props.onChange(next);
+  }
+
+  return (
+    <fieldset className="tw-preset-fields">
+      <legend>{props.label}</legend>
+      <div>
+        {props.values.map((value, index) => (
+          <label key={index}>
+            <input
+              type="number"
+              min={props.step}
+              max={props.max}
+              step={props.step}
+              value={drafts[index] ?? String(value)}
+              aria-label={`${props.label} ${index + 1}`}
+              onChange={(event) => update(index, event.target.value)}
+              onBlur={() => setDrafts(props.values.map(String))}
+            />
+            <span>{props.suffix}</span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
   );
 }
 
@@ -889,65 +902,36 @@ function IconButton(props: { label: string; active?: boolean; onClick?: () => vo
 
 function Toast(props: { toast: { kind: ToastKind; text: string; signature?: string } }) {
   const { toast } = props;
-  const href = toast.signature && !toast.signature.startsWith('stub-') ? `https://solscan.io/tx/${toast.signature}` : undefined;
+  const href = toast.signature ? `https://robinhoodchain.blockscout.com/tx/${toast.signature}` : undefined;
 
   return (
     <div className={`tw-toast tw-toast-${toast.kind}`}>
       {toast.kind === 'success' ? <CheckCircle2 size={14} /> : toast.kind === 'error' ? <X size={14} /> : <Loader2 className="tw-spin" size={14} />}
       <span>{toast.text}</span>
       {toast.signature ? (
-        href ? (
-          <a href={href} target="_blank" rel="noreferrer" title={toast.signature}><ExternalLink size={13} /></a>
-        ) : (
-          <span className="tw-signature" title={toast.signature}>tx</span>
-        )
+        <a href={href} target="_blank" rel="noreferrer" title={toast.signature}>tx</a>
       ) : null}
     </div>
   );
 }
 
-function SolanaMark() {
-  return <span className="tw-solana" aria-hidden="true" />;
-}
-
-async function runTrade(side: TradeSide, amount: number, mint: string | null, settings: TradeSettings, currentWallet: string | null) {
-  let publicKey: string;
-  if (settings.signerMode === 'local') {
-    const status = await new Promise<{ ok: boolean; publicKey?: string; error?: string }>((resolve) => {
-      const sendMessage = window.chrome?.runtime?.sendMessage;
-      if (!sendMessage) { resolve({ ok: false, error: 'Extension runtime unavailable' }); return; }
-      sendMessage({ type: 'TRENCH_HOT_WALLET_STATUS' }, resolve);
-    });
-    if (!status.ok || !status.publicKey) throw new Error('Local hot wallet locked — unlock in options');
-    publicKey = status.publicKey;
-  } else {
-    publicKey = currentWallet ?? (await walletRequest('TRENCH_WALLET_CONNECT')).publicKey ?? '';
-  }
-  if (!publicKey) throw new Error('Wallet not connected');
-
-  const before = mint ? await getPosition(publicKey, mint, settings) : null;
-  const prepared = await prepareTradeMessage(side, amount, mint, publicKey, settings);
-  if (!prepared.ok || !prepared.swapTransaction) throw new Error(prepared.error ?? 'Tx prepare failed');
-
-  const response = settings.signerMode === 'local'
-    ? await signAndSendLocal(prepared.swapTransaction, settings)
-    : await signAndSendBrowserWallet(prepared.swapTransaction, settings);
-  if (!response.ok) throw new Error(response.error ?? 'RPC send failed');
-
-  return { publicKey, before, prepared, response };
-}
-
-async function runEvmTrade(side: TradeSide, amountUsdg: number, tokenAddress: string | null, settings: TradeSettings, inputCurrency: 'USDG' | 'ETH' = 'USDG'): Promise<EvmTradeResponse> {
-  if (!tokenAddress) throw new Error('No token address detected');
-  if (!/^0x[0-9a-fA-F]{40}$/.test(tokenAddress)) throw new Error('Invalid EVM token address');
-  const slippageBps = Math.round(settings.slippage * 100);
-  return chromeMessageEvm<EvmTradeResponse>({
-    type: 'TRENCH_EVM_TRADE',
+async function runEvmBatchTrade(
+  side: TradeSide,
+  amountUsdg: number,
+  tokenAddress: string | null,
+  settings: TradeSettings,
+  accountIds: string[],
+): Promise<EvmBatchTradeResponse> {
+  if (!tokenAddress || !/^0x[0-9a-fA-F]{40}$/.test(tokenAddress)) throw new Error('Invalid EVM token address');
+  if (!accountIds.length) throw new Error('Select at least one wallet');
+  await ensureRuntimeReady();
+  return chromeMessageEvm<EvmBatchTradeResponse>({
+    type: 'TRENCH_EVM_BATCH_TRADE',
     side,
     tokenAddress,
     amountUsdg,
-    slippageBps,
-    inputCurrency,
+    slippageBps: Math.round(settings.slippage * 100),
+    accountIds,
   });
 }
 
@@ -955,114 +939,35 @@ function chromeMessageEvm<T>(message: unknown): Promise<T> {
   return new Promise((resolve, reject) => {
     const chrome = (window as unknown as { chrome?: { runtime?: { sendMessage?: (msg: unknown, cb: (r: unknown) => void) => void } } }).chrome;
     if (!chrome?.runtime?.sendMessage) { reject(new Error('Chrome runtime unavailable')); return; }
-    chrome.runtime.sendMessage(message, (response) => {
-      const r = response as { ok?: boolean; error?: string } | undefined;
-      if (!r) { reject(new Error('No response from background')); return; }
-      if (!r.ok) { reject(new Error(r.error ?? 'EVM trade failed')); return; }
-      resolve(response as T);
-    });
+    try {
+      chrome.runtime.sendMessage(message, (response) => {
+        const runtimeError = (window.chrome?.runtime as { lastError?: { message?: string } } | undefined)?.lastError;
+        if (runtimeError) { reject(new Error(runtimeError.message ?? 'Extension messaging failed')); return; }
+        const r = response as { ok?: boolean; error?: string } | undefined;
+        if (!r) { reject(new Error('No response from background')); return; }
+        if (!r.ok) { reject(new Error(r.error ?? 'EVM trade failed')); return; }
+        resolve(response as T);
+      });
+    } catch (error) {
+      reject(error instanceof Error ? error : new Error('Extension context unavailable'));
+    }
   });
 }
 
-function initPulseQuickBuy() {
-  installPulseStyle();
-  refreshPulseQuickBuyButtons();
-
-  const observer = new MutationObserver(() => refreshPulseQuickBuyButtons());
-  observer.observe(document.body, { childList: true, subtree: true });
-
-  const intervalId = window.setInterval(refreshPulseQuickBuyButtons, 2000);
-
-  function cleanup() {
-    observer.disconnect();
-    window.clearInterval(intervalId);
-    window.removeEventListener('popstate', onPopState);
-  }
-
-  function onPopState() {
-    cleanup();
-    initPulseQuickBuy();
-  }
-
-  window.addEventListener('popstate', onPopState);
-}
-
-function refreshPulseQuickBuyButtons() {
-  if (!isPulsePage()) return;
-
-  for (const link of Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/meme/"]'))) {
-    const mint = parseAxiomMintFromUrl(link.href);
-    if (!mint) continue;
-
-    const card = findPulseCard(link);
-    if (!card || card.querySelector(`.${PULSE_BUTTON_CLASS}[data-mint="${mint}"]`)) continue;
-
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = PULSE_BUTTON_CLASS;
-    button.dataset.mint = mint;
-    button.textContent = 'Quick buy';
-    button.title = `Trench quick buy ${shortMint(mint)}`;
-    button.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      void pulseQuickBuy(button, mint);
-    });
-
-    const target = findPulseButtonTarget(card) ?? card;
-    target.appendChild(button);
-  }
-}
-
-async function pulseQuickBuy(button: HTMLButtonElement, mint: string) {
-  if (button.disabled) return;
-  button.disabled = true;
-  button.dataset.state = 'pending';
-  button.textContent = 'Buying...';
-
+async function ensureRuntimeReady() {
   try {
-    const settings = await loadExtensionSettings();
-    const amount = settings.selectedBuyAmount || settings.buyAmounts[0] || defaultSettings.selectedBuyAmount;
-    const result = await runTrade('buy', amount, mint, settings, null);
-    addTradeHistoryDirect({
-      side: 'buy',
-      mint,
-      wallet: result.publicKey,
-      route: result.prepared.route,
-      signature: result.response.signature,
-      summary: result.prepared.quoteSummary,
-      size: formatTradeValue('buy', amount),
-      status: 'Sent'
-    });
-    button.dataset.state = 'success';
-    button.textContent = 'Bought';
-    window.setTimeout(() => {
-      button.disabled = false;
-      button.dataset.state = '';
-      button.textContent = 'Quick buy';
-    }, 2600);
+    await chromeMessageEvm<{ ok: boolean }>({ type: 'TRENCH_RUNTIME_PING' });
   } catch (error) {
-    const settings = await loadExtensionSettings().catch(() => defaultSettings);
-    addTradeHistoryDirect({
-      side: 'buy',
-      mint,
-      wallet: settings.signerMode === 'local' ? settings.localWalletPublicKey : '',
-      error: error instanceof Error ? error.message : 'Quick buy failed',
-      size: formatTradeValue('buy', settings.selectedBuyAmount || settings.buyAmounts[0] || defaultSettings.selectedBuyAmount),
-      status: 'Failed'
-    });
-    button.dataset.state = 'error';
-    button.textContent = error instanceof Error ? error.message.slice(0, 22) : 'Failed';
-    window.setTimeout(() => {
-      button.disabled = false;
-      button.dataset.state = '';
-      button.textContent = 'Quick buy';
-    }, 3200);
+    if (isInvalidExtensionContext(error)) {
+      window.location.reload();
+      throw new Error('Extension updated. Reloading page before trade.');
+    }
+    throw error;
   }
 }
 
 function initGmgnQuickBuy() {
-  if (!isGmgnPage()) return;
+  if (!isGmgnPage()) return undefined;
   installGmgnStyle();
   refreshGmgnQuickBuyButtons();
 
@@ -1075,18 +980,23 @@ function initGmgnQuickBuy() {
     observer.disconnect();
     window.clearInterval(intervalId);
     window.removeEventListener('popstate', onPopState);
+    removeGmgnQuickBuyControls();
   }
 
   function onPopState() {
-    cleanup();
-    initGmgnQuickBuy();
+    refreshGmgnQuickBuyButtons();
   }
 
   window.addEventListener('popstate', onPopState);
+  return cleanup;
 }
 
 function refreshGmgnQuickBuyButtons() {
-  if (!isGmgnPage()) return;
+  if (!isGmgnRobinhood()) {
+    removeGmgnQuickBuyControls();
+    return;
+  }
+  installGmgnStyle();
 
   for (const card of findGmgnCards()) {
     if (card.getAttribute(GMGN_CARD_FLAG) === '1') continue;
@@ -1095,15 +1005,35 @@ function refreshGmgnQuickBuyButtons() {
     if (!address) continue;
 
     card.setAttribute(GMGN_CARD_FLAG, '1');
-    if (getComputedStyle(card).position === 'static') card.style.position = 'relative';
+
+    const controls = document.createElement('div');
+    controls.className = GMGN_CONTROL_CLASS;
+
+    const amountSelect = document.createElement('select');
+    amountSelect.className = GMGN_AMOUNT_CLASS;
+    amountSelect.title = 'Quick-buy amount';
+    amountSelect.setAttribute('aria-label', 'Quick-buy amount');
+    amountSelect.addEventListener('pointerdown', stopOverlayEvent);
+    amountSelect.addEventListener('click', stopOverlayEvent);
+    amountSelect.addEventListener('change', (event) => {
+      event.stopPropagation();
+      void updateGmgnQuickBuyAmount(Number(amountSelect.value));
+    });
 
     const button = document.createElement('button');
     button.type = 'button';
     button.className = GMGN_BUTTON_CLASS;
     button.dataset.address = address;
     button.textContent = 'BUY';
+    void chromeMessageEvm<EvmAccountsResponse>({ type: 'TRENCH_EVM_ACCOUNTS_LIST' })
+      .then((accounts) => { button.textContent = `BUY · ${accounts.selectedAccountIds.length || 1}W`; })
+      .catch(() => {});
     button.title = `Trench quick buy ${shortMint(address)}`;
+    button.addEventListener('pointerenter', () => {
+      void chromeMessageEvm<{ ok: boolean }>({ type: 'TRENCH_EVM_PREWARM_ROUTE', tokenAddress: address }).catch(() => {});
+    }, { once: true });
     button.addEventListener('click', (event) => {
+      if (!event.isTrusted) return;
       event.preventDefault();
       event.stopPropagation();
       const current = readGmgnCardAddress(card) ?? address;
@@ -1111,8 +1041,49 @@ function refreshGmgnQuickBuyButtons() {
     });
     button.addEventListener('pointerdown', (event) => event.stopPropagation());
 
-    card.appendChild(button);
+    controls.append(amountSelect, button);
+    card.appendChild(controls);
+    void syncGmgnAmountSelect(amountSelect);
   }
+}
+
+function removeGmgnQuickBuyControls() {
+  document.querySelectorAll(`.${GMGN_CONTROL_CLASS}`).forEach((control) => control.remove());
+  document.querySelectorAll(`[${GMGN_CARD_FLAG}]`).forEach((card) => card.removeAttribute(GMGN_CARD_FLAG));
+  document.getElementById(GMGN_STYLE_ID)?.remove();
+}
+
+async function syncGmgnAmountSelect(select: HTMLSelectElement, loadedSettings?: TradeSettings) {
+  const settings = loadedSettings ?? await loadExtensionSettings();
+  select.replaceChildren(...settings.buyAmounts.map((amount) => {
+    const option = document.createElement('option');
+    option.value = String(amount);
+    option.textContent = `${amount} ETH`;
+    return option;
+  }));
+
+  if (!settings.buyAmounts.includes(settings.selectedBuyAmount)) {
+    const option = document.createElement('option');
+    option.value = String(settings.selectedBuyAmount);
+    option.textContent = `${settings.selectedBuyAmount} ETH`;
+    select.appendChild(option);
+  }
+  select.value = String(settings.selectedBuyAmount);
+}
+
+function syncGmgnAmountControls(settings: TradeSettings) {
+  for (const select of Array.from(document.querySelectorAll<HTMLSelectElement>(`.${GMGN_AMOUNT_CLASS}`))) {
+    void syncGmgnAmountSelect(select, settings);
+  }
+}
+
+async function updateGmgnQuickBuyAmount(amount: number) {
+  const current = await loadExtensionSettings();
+  const next = selectQuickBuyAmount(current, amount);
+  if (next === current) return;
+  await saveExtensionSettings(next);
+  document.dispatchEvent(new CustomEvent<TradeSettings>(SETTINGS_CHANGE_EVENT, { detail: next }));
+  syncGmgnAmountControls(next);
 }
 
 function findGmgnCards(): HTMLElement[] {
@@ -1122,14 +1093,21 @@ function findGmgnCards(): HTMLElement[] {
 
 function readGmgnCardAddress(card: HTMLElement): string | null {
   for (const anchor of Array.from(card.querySelectorAll<HTMLAnchorElement>('a[href]'))) {
+    const match = (anchor.getAttribute('href') ?? '').match(GMGN_TOKEN_PATH);
+    if (match) return match[1].toLowerCase();
+  }
+
+  for (const anchor of Array.from(card.querySelectorAll<HTMLAnchorElement>('a[href]'))) {
     const match = (anchor.getAttribute('href') ?? '').match(EVM_ADDRESS_PATTERN);
-    if (match) return match[0].toLowerCase();
+    const address = match?.[0].toLowerCase();
+    if (address && !RH_INFRA_ADDRESSES.has(address)) return address;
   }
 
   for (const element of Array.from(card.querySelectorAll<HTMLElement>('*'))) {
     for (const attribute of Array.from(element.attributes)) {
       const match = attribute.value.match(EVM_ADDRESS_PATTERN);
-      if (match) return match[0].toLowerCase();
+      const address = match?.[0].toLowerCase();
+      if (address && !RH_INFRA_ADDRESSES.has(address)) return address;
     }
   }
 
@@ -1137,32 +1115,30 @@ function readGmgnCardAddress(card: HTMLElement): string | null {
 }
 
 async function gmgnQuickBuy(button: HTMLButtonElement, address: string) {
+  if (!isGmgnRobinhood()) throw new Error('Robinhood Chain page required');
   if (button.disabled) return;
   button.disabled = true;
   button.dataset.state = 'pending';
   button.textContent = '…';
 
   try {
+    await ensureRuntimeReady();
     const settings = await loadExtensionSettings();
-    const status = await chromeMessageEvm<EvmWalletResponse>({ type: 'TRENCH_EVM_WALLET_STATUS' }).catch(() => null);
-    if (!status?.hasWallet) throw new Error('Import RH wallet');
-    if (!status.unlocked) throw new Error('Wallet locked');
+    const accounts = await chromeMessageEvm<EvmAccountsResponse>({ type: 'TRENCH_EVM_ACCOUNTS_LIST' });
+    const accountIds = accounts.selectedAccountIds.length ? accounts.selectedAccountIds : (accounts.activeAccountId ? [accounts.activeAccountId] : []);
+    if (!accountIds.length) throw new Error('Select RH wallet');
 
-    const amountUsdg = settings.selectedBuyAmount || settings.buyAmounts[0] || defaultSettings.selectedBuyAmount;
-    const slippageBps = Math.round(settings.slippage * 100);
-    const result = await runEvmTrade('buy', amountUsdg, address, settings, 'USDG');
-
-    addTradeHistoryDirect({
-      side: 'buy',
-      mint: address,
-      wallet: status.address ?? '',
-      signature: result.hash,
-      summary: `RH buy ${amountUsdg} USDG`,
-      size: formatTradeValue('buy', amountUsdg),
-      status: 'Sent'
-    });
+    const amountEth = settings.selectedBuyAmount || settings.buyAmounts[0] || defaultSettings.selectedBuyAmount;
+    const batch = await runEvmBatchTrade('buy', amountEth, address, settings, accountIds);
+    const filled = batch.results.filter((result) => result.ok).length;
+    batch.results.forEach((result) => addTradeHistoryDirect({
+      side: 'buy', mint: address, wallet: result.address, signature: result.hash,
+      summary: `${result.name} · ${amountEth} ETH`, error: result.error,
+      size: formatTradeValue('buy', amountEth), status: result.ok ? 'Sent' : 'Failed'
+    }));
     button.dataset.state = 'success';
-    button.textContent = 'BOUGHT';
+    button.dataset.wallets = String(batch.results.length);
+    button.textContent = `${filled}/${batch.results.length}`;
     window.setTimeout(() => resetGmgnButton(button), 2600);
   } catch (error) {
     addTradeHistoryDirect({
@@ -1182,7 +1158,9 @@ async function gmgnQuickBuy(button: HTMLButtonElement, address: string) {
 function resetGmgnButton(button: HTMLButtonElement) {
   button.disabled = false;
   button.dataset.state = '';
-  button.textContent = 'BUY';
+  void chromeMessageEvm<EvmAccountsResponse>({ type: 'TRENCH_EVM_ACCOUNTS_LIST' })
+    .then((accounts) => { button.textContent = `BUY · ${accounts.selectedAccountIds.length || 1}W`; })
+    .catch(() => { button.textContent = 'BUY'; });
 }
 
 function installGmgnStyle() {
@@ -1192,32 +1170,53 @@ function installGmgnStyle() {
   style.id = GMGN_STYLE_ID;
   style.textContent = `
     .${GMGN_BUTTON_CLASS} {
-      position: absolute;
-      top: 6px;
-      right: 8px;
-      z-index: 60;
       display: inline-flex;
-      height: 20px;
+      height: 30px;
       align-items: center;
       justify-content: center;
-      padding: 0 8px;
-      border: 1px solid rgba(204, 255, 0, 0.5);
-      border-radius: 4px;
-      background: rgba(20, 26, 5, 0.95);
-      color: #ccff00;
+      padding: 0 10px;
+      border: 1px solid rgba(20, 241, 149, 0.42);
+      border-radius: 5px;
+      background: rgba(15, 36, 25, 0.94);
+      color: #14f195;
       cursor: pointer;
-      font: 700 9px/1 "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
-      letter-spacing: 0.08em;
+      font: 800 9px/1 "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
+      letter-spacing: 0;
       text-transform: uppercase;
       white-space: nowrap;
       opacity: 0.85;
       transition: opacity 80ms, border-color 80ms, color 80ms;
     }
-    .${GMGN_BUTTON_CLASS}:hover { opacity: 1; border-color: #ccff00; color: #e4ff70; }
+    .${GMGN_BUTTON_CLASS}:hover { opacity: 1; border-color: #14f195; background: rgba(18, 51, 33, 0.98); color: #7dffc6; }
+    .${GMGN_BUTTON_CLASS}:focus-visible { outline: 2px solid #14f195; outline-offset: 2px; }
     .${GMGN_BUTTON_CLASS}:disabled { cursor: wait; }
     .${GMGN_BUTTON_CLASS}[data-state="pending"] { opacity: 1; }
-    .${GMGN_BUTTON_CLASS}[data-state="success"] { border-color: #ccff00; color: #ccff00; opacity: 1; }
-    .${GMGN_BUTTON_CLASS}[data-state="error"] { border-color: #ff5c72; color: #ff5c72; opacity: 1; }
+    .${GMGN_BUTTON_CLASS}[data-state="success"] { border-color: #14f195; color: #14f195; opacity: 1; }
+    .${GMGN_BUTTON_CLASS}[data-state="error"] { border-color: #ff607a; color: #ff607a; opacity: 1; }
+    .${GMGN_CONTROL_CLASS} {
+      position: static;
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      align-self: center;
+      margin: 6px 8px 6px auto;
+    }
+    .${GMGN_AMOUNT_CLASS} {
+      width: 78px;
+      height: 30px;
+      padding: 0 4px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 5px;
+      background: rgba(10, 13, 17, 0.96);
+      color: #d7dce5;
+      cursor: pointer;
+      font: 600 9px/1 "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
+      letter-spacing: 0;
+      outline: none;
+    }
+    .${GMGN_AMOUNT_CLASS}:hover { border-color: rgba(20, 241, 149, 0.42); }
+    .${GMGN_AMOUNT_CLASS}:focus-visible { outline: 2px solid #14f195; outline-offset: 2px; }
   `;
   document.head.appendChild(style);
 }
@@ -1226,160 +1225,55 @@ function isGmgnPage() {
   return window.location.hostname === 'gmgn.ai';
 }
 
-function installPulseStyle() {
-  if (document.getElementById(PULSE_STYLE_ID)) return;
-
-  const style = document.createElement('style');
-  style.id = PULSE_STYLE_ID;
-  style.textContent = `
-    .${PULSE_BUTTON_CLASS} {
-      display: inline-flex;
-      height: 24px;
-      align-items: center;
-      justify-content: center;
-      margin: 3px 3px 0 0;
-      padding: 0 8px;
-      border: 1px solid #23280e;
-      border-radius: 4px;
-      background: #0d0d11;
-      color: #ccff00;
-      cursor: pointer;
-      font: 700 9px/1 "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      white-space: nowrap;
-    }
-    .${PULSE_BUTTON_CLASS}:hover { border-color: rgba(204, 255, 0, 0.45); background: rgba(204, 255, 0, 0.06); color: #e4ff70; }
-    .${PULSE_BUTTON_CLASS}:disabled { cursor: wait; opacity: 0.5; }
-    .${PULSE_BUTTON_CLASS}[data-state="success"] { border-color: rgba(204, 255, 0, 0.5); color: #ccff00; }
-    .${PULSE_BUTTON_CLASS}[data-state="error"] { border-color: #281820; color: #ff5c72; }
-  `;
-  document.head.appendChild(style);
-}
-
-function isPulsePage() {
-  return window.location.hostname.endsWith('axiom.trade') && window.location.pathname.startsWith('/pulse');
-}
-
-function findPulseCard(link: HTMLElement) {
-  return link.closest<HTMLElement>('article, li, tr, [role="row"], [data-testid*="card"], [class*="card"], [class*="Card"], [class*="token"], [class*="Token"]') ?? link.parentElement;
-}
-
-function findPulseButtonTarget(card: HTMLElement) {
-  return card.querySelector<HTMLElement>('[class*="action"], [class*="Action"], [class*="button"], [class*="Button"]');
-}
-
-function emptyPosition(symbol: string): PositionState {
-  return { walletSol: 0, walletWsol: 0, tokenAmount: 0, tokenRawAmount: '0', tokenSymbol: symbol, costBasisSol: 0, realizedPnlSol: 0, pnlUsd: 0, pnlSol: 0 };
-}
-
-async function refreshPnlAfterTrade(
-  wallet: string,
-  mint: string,
-  side: TradeSide,
-  before: PositionResponse,
-  settings: TradeSettings,
-  setPnlLedger: (ledger: PnlLedger) => void,
-  setPositionState: React.Dispatch<React.SetStateAction<PositionState>>
-) {
-  await delay(5000);
-  const after = await getPosition(wallet, mint, settings);
-  if (!after.ok) return;
-
-  const next = updatePnlLedger(wallet, mint, side, before, after);
-  setPnlLedger(next);
-  setPositionState((current) => ({
-    ...current,
-    walletSol: after.walletSol ?? current.walletSol,
-    walletWsol: after.walletWsol ?? current.walletWsol,
-    tokenAmount: after.tokenAmount ?? current.tokenAmount,
-    tokenRawAmount: after.tokenRawAmount ?? current.tokenRawAmount,
-    costBasisSol: next.costBasisSol,
-    realizedPnlSol: next.realizedPnlSol,
-    pnlSol: next.realizedPnlSol
-  }));
-}
-
-function updatePnlLedger(wallet: string, mint: string, side: TradeSide, before: PositionResponse, after: PositionResponse) {
-  const current = loadPnlLedger(wallet, mint) ?? { rawTokenAmount: '0', costBasisSol: 0, realizedPnlSol: 0, updatedAt: Date.now() };
-  const beforeRaw = BigInt(before.tokenRawAmount ?? '0');
-  const afterRaw = BigInt(after.tokenRawAmount ?? '0');
-  const tokenDelta = afterRaw - beforeRaw;
-  const solBefore = (before.walletSol ?? 0) + (before.walletWsol ?? 0);
-  const solAfter = (after.walletSol ?? 0) + (after.walletWsol ?? 0);
-  const solDelta = solAfter - solBefore;
-
-  let rawTokenAmount = BigInt(current.rawTokenAmount);
-  let costBasisSol = current.costBasisSol;
-  let realizedPnlSol = current.realizedPnlSol;
-
-  if (side === 'buy' && tokenDelta > 0n && solDelta < 0) {
-    rawTokenAmount += tokenDelta;
-    costBasisSol += Math.abs(solDelta);
-  }
-
-  if (side === 'sell' && tokenDelta < 0n && solDelta > 0 && rawTokenAmount > 0n && costBasisSol > 0) {
-    const soldRaw = minBigInt(-tokenDelta, rawTokenAmount);
-    const soldRatio = Number((soldRaw * 1_000_000n) / rawTokenAmount) / 1_000_000;
-    const removedCostBasis = costBasisSol * soldRatio;
-    rawTokenAmount -= soldRaw;
-    costBasisSol = Math.max(0, costBasisSol - removedCostBasis);
-    realizedPnlSol += solDelta - removedCostBasis;
-  }
-
-  const next: PnlLedger = {
-    rawTokenAmount: rawTokenAmount.toString(),
-    costBasisSol,
-    realizedPnlSol,
-    updatedAt: Date.now()
-  };
-  savePnlLedger(wallet, mint, next);
-  return next;
-}
-
 async function refreshEvmPnlAfterTrade(
   address: string,
   token: string,
   side: TradeSide,
   before: EvmBalancePair,
   setEvmPnl: (ledger: EvmPnlLedger) => void,
-  setEvmTokenAmount: React.Dispatch<React.SetStateAction<number>>
+  setEvmTokenAmount: (amount: number) => void,
+  refreshEvmBalances: (address: string) => void,
 ) {
-  await delay(6000);
-  const after = await fetchEvmBalancePair(address, token).catch(() => null);
-  if (!after) return;
-  const next = updateEvmPnlLedger(address, token, side, before, after);
-  setEvmPnl(next);
-  setEvmTokenAmount(Number(after.token) / 1e18);
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    await delay(1_000);
+    const after = await fetchEvmBalancePair(address, token).catch(() => null);
+    if (!after) continue;
+    if (after.token === before.token && after.eth === before.eth) continue;
+    const next = updateEvmPnlLedger(address, token, side, before, after);
+    setEvmPnl(next);
+    setEvmTokenAmount(formatEvmTokenAmount(after.token, after.tokenDecimals));
+    refreshEvmBalances(address);
+    return;
+  }
 }
 
 function updateEvmPnlLedger(address: string, token: string, side: TradeSide, before: EvmBalancePair, after: EvmBalancePair): EvmPnlLedger {
-  const current = loadEvmPnlLedger(address, token) ?? { rawTokenAmount: '0', costBasisUsdg: 0, realizedPnlUsdg: 0, updatedAt: Date.now() };
+  const current = loadEvmPnlLedger(address, token) ?? { rawTokenAmount: '0', costBasisEth: 0, realizedPnlEth: 0, updatedAt: Date.now() };
   const tokenDelta = after.token - before.token;
-  const usdgDelta = Number(after.usdg - before.usdg) / 1e6;
+  const ethDelta = Number(after.eth - before.eth) / 1e18;
 
   let rawTokenAmount = BigInt(current.rawTokenAmount);
-  let costBasisUsdg = current.costBasisUsdg;
-  let realizedPnlUsdg = current.realizedPnlUsdg;
+  let costBasisEth = current.costBasisEth;
+  let realizedPnlEth = current.realizedPnlEth;
 
-  if (side === 'buy' && tokenDelta > 0n && usdgDelta < 0) {
+  if (side === 'buy' && tokenDelta > 0n && ethDelta < 0) {
     rawTokenAmount += tokenDelta;
-    costBasisUsdg += Math.abs(usdgDelta);
+    costBasisEth += Math.abs(ethDelta);
   }
 
-  if (side === 'sell' && tokenDelta < 0n && usdgDelta > 0 && rawTokenAmount > 0n && costBasisUsdg > 0) {
+  if (side === 'sell' && tokenDelta < 0n && ethDelta > 0 && rawTokenAmount > 0n && costBasisEth > 0) {
     const soldRaw = minBigInt(-tokenDelta, rawTokenAmount);
     const soldRatio = Number((soldRaw * 1_000_000n) / rawTokenAmount) / 1_000_000;
-    const removedCostBasis = costBasisUsdg * soldRatio;
+    const removedCostBasis = costBasisEth * soldRatio;
     rawTokenAmount -= soldRaw;
-    costBasisUsdg = Math.max(0, costBasisUsdg - removedCostBasis);
-    realizedPnlUsdg += usdgDelta - removedCostBasis;
+    costBasisEth = Math.max(0, costBasisEth - removedCostBasis);
+    realizedPnlEth += ethDelta - removedCostBasis;
   }
 
   const next: EvmPnlLedger = {
     rawTokenAmount: rawTokenAmount.toString(),
-    costBasisUsdg,
-    realizedPnlUsdg,
+    costBasisEth,
+    realizedPnlEth,
     updatedAt: Date.now()
   };
   saveEvmPnlLedger(address, token, next);
@@ -1388,7 +1282,8 @@ function updateEvmPnlLedger(address: string, token: string, side: TradeSide, bef
 
 function loadEvmPnlLedger(address: string, token: string): EvmPnlLedger | null {
   const store = loadEvmPnlStore();
-  return store[evmPnlKey(address, token)] ?? null;
+  const ledger = store[evmPnlKey(address, token)];
+  return ledger && Number.isFinite(ledger.costBasisEth) && Number.isFinite(ledger.realizedPnlEth) ? ledger : null;
 }
 
 function saveEvmPnlLedger(address: string, token: string, ledger: EvmPnlLedger) {
@@ -1410,11 +1305,47 @@ function evmPnlKey(address: string, token: string) {
 }
 
 async function fetchEvmBalancePair(address: string, token: string): Promise<EvmBalancePair> {
-  const [tokenRaw, usdgRaw] = await Promise.all([
+  const [tokenRaw, ethRaw, tokenDecimals] = await Promise.all([
     fetchEvmRawBalance(address, token),
-    fetchEvmRawBalance(address, RH_USDG_ADDRESS)
+    fetchEvmRawEthBalance(address),
+    fetchEvmTokenDecimals(token),
   ]);
-  return { token: tokenRaw, usdg: usdgRaw };
+  return { token: tokenRaw, eth: ethRaw, tokenDecimals };
+}
+
+function formatEvmTokenAmount(raw: bigint, decimals: number) {
+  return Number(raw) / 10 ** decimals;
+}
+
+async function fetchEvmTokenDecimals(token: string): Promise<number> {
+  const response = await fetch(RH_RPC_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_call', params: [{ to: token, data: '0x313ce567' }, 'latest'], id: 1 }),
+  });
+  const payload = await response.json() as { result?: string };
+  const decimals = payload.result ? Number(BigInt(payload.result)) : 18;
+  return Number.isInteger(decimals) && decimals >= 0 && decimals <= 255 ? decimals : 18;
+}
+
+async function fetchEvmRawEthBalance(address: string): Promise<bigint> {
+  const response = await fetch(RH_RPC_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_getBalance', params: [address, 'latest'], id: 1 }),
+  });
+  const payload = await response.json() as { result?: string };
+  return payload.result ? BigInt(payload.result) : 0n;
+}
+
+async function fetchEvmEthBalance(address: string): Promise<number> {
+  const response = await fetch(RH_RPC_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_getBalance', params: [address, 'latest'], id: 1 }),
+  });
+  const payload = await response.json() as { result?: string };
+  return payload.result ? Number(BigInt(payload.result)) / 1e18 : 0;
 }
 
 async function fetchEvmRawBalance(address: string, token: string): Promise<bigint> {
@@ -1426,29 +1357,6 @@ async function fetchEvmRawBalance(address: string, token: string): Promise<bigin
   });
   const payload = (await response.json().catch(() => null)) as { result?: string } | null;
   return payload?.result && payload.result !== '0x' ? BigInt(payload.result) : 0n;
-}
-
-function loadPnlLedger(wallet: string, mint: string): PnlLedger | null {
-  const store = loadPnlStore();
-  return store[pnlKey(wallet, mint)] ?? null;
-}
-
-function savePnlLedger(wallet: string, mint: string, ledger: PnlLedger) {
-  const store = loadPnlStore();
-  store[pnlKey(wallet, mint)] = ledger;
-  localStorage.setItem(PNL_LEDGER_KEY, JSON.stringify(store));
-}
-
-function loadPnlStore(): Record<string, PnlLedger> {
-  try {
-    return JSON.parse(localStorage.getItem(PNL_LEDGER_KEY) ?? '{}') as Record<string, PnlLedger>;
-  } catch {
-    return {};
-  }
-}
-
-function pnlKey(wallet: string, mint: string) {
-  return `${wallet}:${mint}`;
 }
 
 function delay(ms: number) {
@@ -1471,7 +1379,6 @@ function addTradeHistoryDirect(order: Omit<TradeOrder, 'id' | 'createdAt'>) {
   const current = loadTradeHistory();
   const next = [{ ...order, id: `tr-${Date.now()}-${Math.random().toString(16).slice(2)}`, createdAt: Date.now() }, ...current].slice(0, 50);
   localStorage.setItem(TRADE_HISTORY_KEY, JSON.stringify(next));
-  void window.chrome?.runtime?.sendMessage?.({ type: 'TRENCH_SYNC_TRADE_HISTORY', entries: next });
 }
 
 function loadTradeHistory(): TradeOrder[] {
@@ -1486,127 +1393,16 @@ function loadTradeHistory(): TradeOrder[] {
 function formatOrderSummary(order: TradeOrder) {
   if (order.error) return order.error;
   if (order.summary) return order.summary;
-  const route = order.route ? order.route.toUpperCase() : 'TX';
-  return order.mint ? `${route} ${shortMint(order.mint)}` : route;
+  return order.mint ? `TX ${shortMint(order.mint)}` : 'TX';
 }
 
 function formatTime(timestamp: number) {
   return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function walletButtonLabel(settings: TradeSettings, wallet: string | null) {
-  if (settings.signerMode === 'local') return settings.localWalletPublicKey ? `Hot wallet ${shortMint(settings.localWalletPublicKey)}` : 'Hot wallet not set';
-  return wallet ? `Wallet ${shortMint(wallet)}` : 'Connect wallet';
-}
-
-function connectBrowserWallet(
-  settings: TradeSettings,
-  setWallet: (wallet: string) => void,
-  setToast: (toast: { kind: ToastKind; text: string; signature?: string } | null) => void
-) {
-  if (settings.signerMode === 'local') {
-    setToast({ kind: settings.localWalletPublicKey ? 'info' : 'error', text: settings.localWalletPublicKey ? 'Using local hot wallet' : 'Import hot wallet in options' });
-    return;
-  }
-
-  walletRequest('TRENCH_WALLET_CONNECT')
-    .then((value) => value.publicKey && setWallet(value.publicKey))
-    .catch((error: unknown) => setToast({ kind: 'error', text: error instanceof Error ? error.message : 'Wallet error' }));
-}
-
-function prepareTradeMessage(side: TradeSide, amount: number, mint: string | null, wallet: string, settings: TradeSettings): Promise<TradeResponse> {
-  return new Promise((resolve) => {
-    const sendMessage = window.chrome?.runtime?.sendMessage;
-    if (!sendMessage) {
-      window.setTimeout(() => resolve({ ok: false, error: 'Extension runtime unavailable' }), 200);
-      return;
-    }
-
-    sendMessage({ type: 'TRENCH_PREPARE_TRADE', side, amount, mint, wallet, settings }, resolve);
-  });
-}
-
-function getPosition(wallet: string, mint: string | null, settings: TradeSettings): Promise<PositionResponse> {
-  return new Promise((resolve) => {
-    const sendMessage = window.chrome?.runtime?.sendMessage;
-    if (!sendMessage) {
-      window.setTimeout(() => resolve({ ok: false, error: 'Extension runtime unavailable' }), 200);
-      return;
-    }
-
-    sendMessage({ type: 'TRENCH_GET_POSITION', wallet, mint, settings }, resolve);
-  });
-}
-
-async function signAndSendBrowserWallet(transaction: string, settings: TradeSettings): Promise<TradeResponse> {
-  const signed = await walletRequest('TRENCH_WALLET_SIGN_TRANSACTION', transaction);
-  if (!signed.signedTransaction) throw new Error('Wallet did not sign transaction');
-  return sendSignedTransaction(signed.signedTransaction, settings);
-}
-
-function sendSignedTransaction(signedTransaction: string, settings: TradeSettings): Promise<TradeResponse> {
-  return new Promise((resolve) => {
-    const sendMessage = window.chrome?.runtime?.sendMessage;
-    if (!sendMessage) {
-      window.setTimeout(() => resolve({ ok: false, error: 'Extension runtime unavailable' }), 200);
-      return;
-    }
-
-    sendMessage({ type: 'TRENCH_SEND_SIGNED_TRANSACTION', signedTransaction, settings }, resolve);
-  });
-}
-
-function signAndSendLocal(transaction: string, settings: TradeSettings): Promise<TradeResponse> {
-  return new Promise((resolve) => {
-    const sendMessage = window.chrome?.runtime?.sendMessage;
-    if (!sendMessage) {
-      window.setTimeout(() => resolve({ ok: false, error: 'Extension runtime unavailable' }), 200);
-      return;
-    }
-
-    sendMessage({ type: 'TRENCH_SIGN_AND_SEND_LOCAL', transaction, settings }, resolve);
-  });
-}
-
-function walletRequest(type: WalletBridgeRequest['type'], transaction?: string): Promise<WalletBridgeResponse> {
-  const id = `tw-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-
-  return new Promise((resolve, reject) => {
-    const timeout = window.setTimeout(() => {
-      window.removeEventListener('message', onMessage);
-      reject(new Error('Wallet timeout'));
-    }, 60_000);
-
-    function onMessage(event: MessageEvent<WalletBridgeResponse>) {
-      if (event.source !== window) return;
-      const response = event.data;
-      if (response?.type !== 'TRENCH_WALLET_RESPONSE' || response.id !== id) return;
-
-      window.clearTimeout(timeout);
-      window.removeEventListener('message', onMessage);
-
-      if (!response.ok) reject(new Error(response.error ?? 'Wallet error'));
-      else resolve(response);
-    }
-
-    window.addEventListener('message', onMessage);
-    window.postMessage({ id, type, transaction }, window.location.origin);
-  });
-}
-
-function injectWalletBridge() {
-  const src = window.chrome?.runtime?.getURL?.('injected.js');
-  if (!src || document.querySelector(`script[src="${src}"]`)) return;
-
-  const script = document.createElement('script');
-  script.src = src;
-  script.type = 'module';
-  script.dataset.trench = 'wallet-bridge';
-  (document.head || document.documentElement).appendChild(script);
-}
-
 function clampPosition(position: { x: number; y: number }) {
-  const maxX = Math.max(8, window.innerWidth - 344);
+  const widgetWidth = Math.min(312, window.innerWidth - 16);
+  const maxX = Math.max(8, window.innerWidth - widgetWidth - 8);
   const maxY = Math.max(8, window.innerHeight - 80);
 
   return {
@@ -1625,19 +1421,8 @@ function formatTradeValue(side: TradeSide, value: number) {
   return side === 'sell' ? `${value}%` : String(value);
 }
 
-function isPublicRpc(settings: TradeSettings) {
-  const url = settings.rpcUrl;
-  return url.includes('api.mainnet-beta.solana.com')
-    || url.includes('solana-rpc.publicnode.com')
-    || url.includes('solana.drpc.org');
-}
-
-function createPresetId() {
-  return `preset-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-}
-
-function sanitizePresetName(name: string) {
-  return name.trim().replace(/\s+/g, ' ').slice(0, 24) || 'Preset';
+function tradeExplorerUrl(order: TradeOrder) {
+  return `https://robinhoodchain.blockscout.com/tx/${order.signature}`;
 }
 
 function shortMint(mint: string) {
@@ -1646,16 +1431,6 @@ function shortMint(mint: string) {
 
 function capitalize(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function parseNumberList(value: string, fallback: number[]) {
-  const parsed = value
-    .split(/[\s,]+/)
-    .map((part) => Number(part.trim()))
-    .filter((part) => Number.isFinite(part) && part > 0)
-    .slice(0, 4);
-
-  return parsed.length ? parsed : fallback;
 }
 
 mount();

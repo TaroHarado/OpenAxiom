@@ -23,8 +23,8 @@ function isInfraAddress(addr: string): boolean {
 }
 // gmgn is an SPA and drops the ?chain=robinhood query when you open a token,
 // so we default gmgn.ai to Robinhood Chain unless the URL clearly points at another chain.
-const GMGN_OTHER_CHAIN_PATH = /^\/(sol|solana|eth|ethereum|base|bsc|bnb|tron|blast|sui|ton|arb|arbitrum|op|optimism|polygon|matic|avax|zksync|scroll|linea|mantle)\b/i;
-const GMGN_OTHER_CHAIN_QUERY = /chain=(sol|solana|eth|ethereum|base|bsc|bnb|tron|blast|sui|ton|arb|op|polygon|avax)/i;
+const GMGN_OTHER_CHAIN_PATH = /^\/(sol(?:ana)?|eth|ethereum|base|bsc|bnb|tron|blast|sui|ton|arb|arbitrum|op|optimism|polygon|matic|avax|zksync|scroll|linea|mantle)\b/i;
+const GMGN_OTHER_CHAIN_QUERY = /chain=(sol(?:ana)?|eth|ethereum|base|bsc|bnb|tron|blast|sui|ton|arb|op|polygon|avax)/i;
 
 export function isGmgnRobinhood(): boolean {
   if (window.location.hostname !== 'gmgn.ai') return false;
@@ -41,8 +41,7 @@ export function readGmgnTokenContext(): TokenContext {
   return {
     mint: domMint,
     symbol,
-    source: urlMint ? 'axiom-url' : domMint ? 'dom' : 'unknown',
-    chain: 'robinhood',
+    source: urlMint ? 'url' : domMint ? 'dom' : 'unknown',
   };
 }
 

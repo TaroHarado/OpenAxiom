@@ -1,19 +1,19 @@
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; letter-spacing: 0 !important; }
 
 body {
-  background: #090b0e;
-  color: #c8e8e0;
-  font-family: ui-monospace, 'JetBrains Mono', 'Geist Mono', monospace;
+  background: #07080b;
+  color: #e9ecf2;
+  font-family: 'Geist Mono', 'JetBrains Mono', ui-monospace, 'Cascadia Code', monospace;
   font-size: 12px;
   overflow: hidden;
-  height: 100vh;
+  height: 100dvh;
 }
 
 /* ── Root ── */
 .tr-root {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100dvh;
 }
 
 /* ── Header ── */
@@ -22,8 +22,8 @@ body {
   align-items: center;
   gap: 10px;
   padding: 7px 14px;
-  background: #0c0e12;
-  border-bottom: 1px solid #1a1e24;
+  background: #0c0d12;
+  border-bottom: 1px solid #1a1c27;
   flex-shrink: 0;
   height: 40px;
 }
@@ -32,7 +32,7 @@ body {
   font-size: 13px;
   font-weight: 800;
   letter-spacing: 0.1em;
-  color: #fff;
+  color: #e9ecf2;
 }
 
 .tr-chain-badge {
@@ -57,26 +57,26 @@ body {
   align-items: center;
   gap: 5px;
   font-size: 11px;
-  color: #555;
+  color: #7f8596;
 }
 
 .tr-ctrl-input {
   width: 46px;
-  background: rgba(255,255,255,0.04);
-  border: 1px solid #1e2228;
+  background: #07080b;
+  border: 1px solid #1a1c27;
   border-radius: 3px;
-  color: #c8e8e0;
+  color: #e9ecf2;
   font-family: inherit;
   font-size: 11px;
   padding: 2px 5px;
   outline: none;
   text-align: center;
 }
-.tr-ctrl-input:focus { border-color: rgba(20,241,149,0.4); }
+.tr-ctrl-input:focus { border-color: rgba(20,241,149,0.48); box-shadow: 0 0 0 3px rgba(20,241,149,0.06); }
 
 .tr-block-status {
   font-size: 10px;
-  color: #333;
+  color: #565c6b;
   min-width: 120px;
   text-align: right;
 }
@@ -95,7 +95,7 @@ body {
 .tr-lane {
   display: flex;
   flex-direction: column;
-  border-right: 1px solid #1a1e24;
+  border-right: 1px solid #1a1c27;
   overflow: hidden;
 }
 .tr-lane:last-child { border-right: none; }
@@ -105,8 +105,8 @@ body {
   align-items: center;
   gap: 7px;
   padding: 6px 10px;
-  background: #0c0e12;
-  border-bottom: 1px solid #1a1e24;
+  background: #0c0d12;
+  border-bottom: 1px solid #1a1c27;
   flex-shrink: 0;
   height: 32px;
 }
@@ -115,20 +115,20 @@ body {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.1em;
-  color: #888;
+  color: #9299aa;
 }
 
 .tr-lane-count {
   font-size: 10px;
   background: rgba(255,255,255,0.06);
-  color: #555;
+  color: #7f8596;
   padding: 1px 5px;
   border-radius: 8px;
 }
 
 .tr-lane-status {
   font-size: 9px;
-  color: #333;
+  color: #565c6b;
   margin-left: auto;
 }
 
@@ -140,12 +140,12 @@ body {
 
 .tr-lane-feed::-webkit-scrollbar { width: 3px; }
 .tr-lane-feed::-webkit-scrollbar-track { background: transparent; }
-.tr-lane-feed::-webkit-scrollbar-thumb { background: #1e2228; border-radius: 2px; }
+.tr-lane-feed::-webkit-scrollbar-thumb { background: #1a1c27; border-radius: 2px; }
 
 .tr-lane-empty {
   padding: 24px 12px;
   font-size: 11px;
-  color: #2a2e34;
+  color: #424755;
   text-align: center;
 }
 
@@ -156,12 +156,12 @@ body {
   gap: 8px;
   align-items: center;
   padding: 7px 8px 7px 10px;
-  border-bottom: 1px solid #13161a;
+  border-bottom: 1px solid #12141d;
   transition: background 0.1s;
   position: relative;
   min-height: 72px;
 }
-.tr-row:hover { background: rgba(255,255,255,0.02); }
+.tr-row:hover { background: rgba(20,241,149,0.025); }
 
 .tr-row-avatar {
   width: 40px;
@@ -172,15 +172,15 @@ body {
 .tr-avatar-placeholder {
   width: 40px;
   height: 40px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #1a2a22 0%, #0f1a14 100%);
-  border: 1px solid #1e2a22;
+  border-radius: 8px;
+  background: linear-gradient(145deg, #10151a, #07110c);
+  border: 1px solid rgba(20,241,149,0.18);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 14px;
   font-weight: 700;
-  color: #14f19588;
+  color: rgba(20,241,149,0.62);
   text-transform: uppercase;
 }
 
@@ -201,7 +201,7 @@ body {
 .tr-row-symbol {
   font-size: 12px;
   font-weight: 700;
-  color: #e8f8f4;
+  color: #e9ecf2;
   flex-shrink: 0;
   max-width: 80px;
   overflow: hidden;
@@ -211,7 +211,7 @@ body {
 
 .tr-row-name {
   font-size: 10px;
-  color: #3a4a44;
+  color: #565c6b;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -221,14 +221,14 @@ body {
 
 .tr-row-age {
   font-size: 10px;
-  color: #3a4a44;
+  color: #565c6b;
   flex-shrink: 0;
   margin-left: auto;
 }
 
 .tr-row-addr {
   font-size: 9px;
-  color: #2a3830;
+  color: #424755;
   letter-spacing: 0.02em;
 }
 
@@ -241,7 +241,7 @@ body {
 
 .tr-m {
   font-size: 10px;
-  color: #6a8880;
+  color: #7f8596;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -249,12 +249,12 @@ body {
 
 .tr-ml {
   font-size: 9px;
-  color: #3a4a44;
+  color: #565c6b;
   margin-right: 1px;
 }
 
 .tr-fee {
-  color: #4a6a60;
+  color: #687082;
   font-size: 9px;
 }
 
@@ -269,8 +269,8 @@ body {
 
 .tr-btn-pair {
   display: flex;
-  border: 1px solid #1e2a24;
-  border-radius: 4px;
+  border: 1px solid #1a1c27;
+  border-radius: 6px;
   overflow: hidden;
 }
 
@@ -281,8 +281,8 @@ body {
   padding: 5px 8px;
   background: transparent;
   border: none;
-  border-right: 1px solid #1e2a24;
-  color: #4a7a64;
+  border-right: 1px solid #1a1c27;
+  color: #7f8596;
   cursor: pointer;
   transition: background 0.1s, color 0.1s;
   white-space: nowrap;
@@ -290,7 +290,7 @@ body {
   text-align: center;
   letter-spacing: 0.03em;
 }
-.tr-row-gmgn:hover { background: rgba(255,255,255,0.04); color: #7ab89a; }
+.tr-row-gmgn:hover { background: rgba(255,255,255,0.04); color: #e9ecf2; }
 
 .tr-row-buy {
   font-family: inherit;
@@ -309,6 +309,7 @@ body {
 }
 .tr-row-buy:hover:not(:disabled) { background: rgba(20,241,149,0.16); }
 .tr-row-buy:disabled { opacity: 0.4; cursor: default; }
+.tr-row-buy:focus-visible, .tr-row-gmgn:focus-visible, .tr-ctrl-input:focus-visible { outline: 2px solid #14f195; outline-offset: 2px; }
 
 .tr-buying { animation: tr-pulse 0.8s ease-in-out infinite; }
 @keyframes tr-pulse { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
@@ -316,7 +317,7 @@ body {
 .tr-row-err {
   grid-column: 1 / -1;
   font-size: 9px;
-  color: #ff6b6b;
+  color: #ff607a;
   padding: 2px 0 0 48px;
   word-break: break-all;
 }

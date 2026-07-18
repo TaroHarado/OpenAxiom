@@ -10,12 +10,51 @@ const POOL_CREATED_TOPIC = '0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b
 const SWAP_TOPIC = '0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67';
 const MAX_PER_LANE = 50;
 
+type RuntimeResponse = { ok?: boolean; hash?: string; error?: string; summary?: string; results?: Array<{ ok: boolean; hash?: string; error?: string }> };
+
+function sendRuntimeMessage(message: unknown): Promise<RuntimeResponse> {
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.runtime.sendMessage(message, (response) => {
+        const runtimeError = chrome.runtime.lastError;
+        if (runtimeError) {
+          reject(new Error(runtimeError.message));
+          return;
+        }
+        resolve((response ?? {}) as RuntimeResponse);
+      });
+    } catch (error) {
+      reject(error instanceof Error ? error : new Error('Extension context unavailable'));
+    }
+  });
+}
+
+function isInvalidExtensionContext(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /extension context invalidated|receiving end does not exist|message port closed/i.test(message);
+}
+
+async function ensureRuntimeReady() {
+  try {
+    const response = await sendRuntimeMessage({ type: 'TRENCH_RUNTIME_PING' });
+    if (!response.ok) throw new Error('Extension background unavailable');
+  } catch (error) {
+    if (isInvalidExtensionContext(error)) {
+      window.location.reload();
+      return false;
+    }
+    throw error;
+  }
+  return true;
+}
+
 interface TokenRow {
   address: string;
   symbol: string;
   name: string;
   pool: string;
   fee: number;
+  quoteCurrency: 'WETH' | 'USDG';
   blockNumber: number;
   blockTs: number;
   mcUsdg: number;
@@ -26,6 +65,7 @@ interface TokenRow {
   buying?: boolean;
   buyError?: string;
   buyHash?: string;
+  buySummary?: string;
 }
 
 async function rpcCall(method: string, params: unknown[]): Promise<unknown> {
@@ -95,6 +135,14 @@ async function fetchPoolStats(pool: string, blockFrom: number): Promise<{ mcUsdg
   }
 }
 
+// Safely extract a 20-byte EVM address from a 32-byte topic or data word
+function extractAddr(hex: string): string {
+  const raw = hex.startsWith('0x') ? hex.slice(2) : hex;
+  const addr = raw.slice(-40).toLowerCase(); // last 40 hex chars = 20 bytes
+  if (addr.length !== 40) return '';
+  return '0x' + addr;
+}
+
 async function getLatestBlock(): Promise<number> {
   const hex = await rpcCall('eth_blockNumber', []) as string;
   return parseInt(hex, 16);
@@ -126,28 +174,46 @@ function shortAddr(addr: string): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
-async function doBuy(tokenAddress: string, amountUsdg: number, slippageBps: number): Promise<{ ok: boolean; hash?: string; error?: string }> {
-  return new Promise((resolve) => {
-    chrome.runtime.sendMessage({
-      type: 'TRENCH_EVM_TRADE',
+async function doBuy(token: TokenRow, amountEth: number, slippageBps: number): Promise<{ ok: boolean; hash?: string; error?: string; summary?: string }> {
+  const tokenAddress = token.address;
+  try {
+    if (!await ensureRuntimeReady()) return { ok: false, error: 'Reloading extension context' };
+    const accounts = await sendRuntimeMessage({ type: 'TRENCH_EVM_ACCOUNTS_LIST' }) as { activeAccountId?: string; selectedAccountIds?: string[] };
+    const accountIds = accounts.selectedAccountIds?.length ? accounts.selectedAccountIds : (accounts.activeAccountId ? [accounts.activeAccountId] : []);
+    if (!accountIds.length) return { ok: false, error: 'Select a wallet in Options' };
+    const response = await sendRuntimeMessage({
+      type: 'TRENCH_EVM_BATCH_TRADE',
+      accountIds,
       side: 'buy',
       tokenAddress,
-      amountUsdg,
+      pairAddress: token.quoteCurrency === 'WETH' ? token.pool : undefined,
+      poolFee: token.quoteCurrency === 'WETH' ? token.fee : undefined,
+      amountUsdg: amountEth,
       slippageBps,
-      inputCurrency: 'USDG',
-    }, (r) => {
-      const resp = r as { ok?: boolean; hash?: string; error?: string } | undefined;
-      if (!resp) { resolve({ ok: false, error: 'No response' }); return; }
-      resolve({ ok: !!resp.ok, hash: resp.hash, error: resp.error });
     });
-  });
+    const results = response.results;
+    const filled = results?.filter((result) => result.ok) ?? [];
+    const total = results?.length ?? accountIds.length;
+    const failed = total - filled.length;
+    return {
+      ok: filled.length > 0,
+      hash: filled[0]?.hash,
+      summary: `${filled.length}/${total} wallets`,
+      error: failed ? `${failed} wallet${failed === 1 ? '' : 's'} failed` : undefined,
+    };
+  } catch (error) {
+    if (isInvalidExtensionContext(error)) {
+      return { ok: false, error: 'Extension reloaded during trade. Check wallet activity before retrying.' };
+    }
+    return { ok: false, error: error instanceof Error ? error.message : 'Buy failed' };
+  }
 }
 
 function TokenRow({ token, buyAmount, slippageBps, onBuy }: {
   token: TokenRow;
   buyAmount: number;
   slippageBps: number;
-  onBuy: (addr: string) => void;
+  onBuy: (token: TokenRow) => void;
 }) {
   const age = formatAge(token.blockTs);
   const feeLabel = (token.fee / 10000).toFixed(2) + '%';
@@ -180,15 +246,17 @@ function TokenRow({ token, buyAmount, slippageBps, onBuy }: {
           <button
             className={`tr-row-buy ${token.buying ? 'tr-buying' : ''}`}
             disabled={token.buying}
-            onClick={() => onBuy(token.address)}
-            title={`Buy ${buyAmount} USDG`}
+            onClick={(event) => {
+              if (event.nativeEvent.isTrusted) onBuy(token);
+            }}
+            title={`Buy ${buyAmount} WETH`}
           >{token.buying ? '…' : '⚡ BUY'}</button>
         </div>
       </div>
       {token.buyError && <div className="tr-row-err">{token.buyError}</div>}
       {token.buyHash && (
         <div className="tr-row-ok">
-          <a href={`https://robinhoodchain.blockscout.com/tx/${token.buyHash}`} target="_blank" rel="noreferrer">✓ {token.buyHash.slice(0, 10)}…</a>
+          <a href={`https://robinhoodchain.blockscout.com/tx/${token.buyHash}`} target="_blank" rel="noreferrer">{token.buySummary ?? 'Filled'} · {token.buyHash.slice(0, 10)}…</a>
         </div>
       )}
     </div>
@@ -200,7 +268,7 @@ function Lane({ title, tokens, buyAmount, slippageBps, onBuy, status }: {
   tokens: TokenRow[];
   buyAmount: number;
   slippageBps: number;
-  onBuy: (addr: string) => void;
+  onBuy: (token: TokenRow) => void;
   status?: string;
 }) {
   return (
@@ -229,7 +297,7 @@ function Lane({ title, tokens, buyAmount, slippageBps, onBuy, status }: {
 
 export default function TrenchesApp() {
   const [tokenMap, setTokenMap] = useState<Map<string, TokenRow>>(new Map());
-  const [buyAmount, setBuyAmount] = useState(10);
+  const [buyAmount, setBuyAmount] = useState(0.01);
   const [slippage, setSlippage] = useState(0.5);
   const [blockStatus, setBlockStatus] = useState('Connecting…');
   const lastBlockRef = useRef(0);
@@ -252,14 +320,16 @@ export default function TrenchesApp() {
 
   const processLogs = useCallback(async (logs: Array<{ topics: string[]; data: string; blockNumber: string }>) => {
     for (const log of logs) {
-      const token0 = '0x' + log.topics[1].slice(26).toLowerCase();
-      const token1 = '0x' + log.topics[2].slice(26).toLowerCase();
+      const token0 = extractAddr(log.topics[1]);
+      const token1 = extractAddr(log.topics[2]);
       const fee = parseInt(log.topics[3], 16);
-      // pool address is in data bytes 12..32 (first 32 bytes, last 20 = address)
-      const pool = ('0x' + log.data.slice(2 + 24, 2 + 64)).toLowerCase();
+      // PoolCreated data: tickSpacing(32 bytes) + pool(32 bytes) — pool = last 40 hex chars
+      const pool = extractAddr(log.data);
       const blockNum = parseInt(log.blockNumber, 16);
 
       if (!pool || pool === '0x' + '0'.repeat(40)) continue;
+      const liquidityHex = await ethCall(pool, '0x1a686502').catch(() => '0x0');
+      if (BigInt(liquidityHex || '0x0') === 0n) continue;
       // deduplicate by pool address only — same token can have multiple pools
       if (seenPools.current.has(pool)) continue;
       seenPools.current.add(pool);
@@ -267,11 +337,18 @@ export default function TrenchesApp() {
       const weth = WETH.toLowerCase();
       const usdg = USDG.toLowerCase();
 
-      // pick the non-WETH/USDG side as the token
+      // Pick the non-quote side as the token and retain the pool's actual quote currency.
       let tokenAddr: string;
-      if (token0 === weth || token0 === usdg) tokenAddr = token1;
-      else if (token1 === weth || token1 === usdg) tokenAddr = token0;
-      else tokenAddr = token0; // unknown pair — show token0
+      let quoteCurrency: TokenRow['quoteCurrency'];
+      if (token0 === weth || token0 === usdg) {
+        tokenAddr = token1;
+        quoteCurrency = token0 === weth ? 'WETH' : 'USDG';
+      } else if (token1 === weth || token1 === usdg) {
+        tokenAddr = token0;
+        quoteCurrency = token1 === weth ? 'WETH' : 'USDG';
+      } else {
+        continue;
+      }
 
       if (!tokenAddr || tokenAddr === '0x' + '0'.repeat(40)) continue;
 
@@ -287,6 +364,7 @@ export default function TrenchesApp() {
         name,
         pool,
         fee,
+        quoteCurrency,
         blockNumber: blockNum,
         blockTs,
         mcUsdg: 0,
@@ -343,23 +421,34 @@ export default function TrenchesApp() {
     return () => { stopped = true; clearInterval(id); };
   }, [processLogs]);
 
-  const handleBuy = useCallback(async (addr: string) => {
+  useEffect(() => {
+    void ensureRuntimeReady().catch((error) => {
+      setBlockStatus(`Extension error: ${(error as Error).message.slice(0, 32)}`);
+    });
+  }, []);
+
+  const handleBuy = useCallback(async (token: TokenRow) => {
+    const addr = token.address;
     setTokenMap(prev => {
       const next = new Map(prev);
       const t = next.get(addr.toLowerCase());
-      if (t) next.set(addr.toLowerCase(), { ...t, buying: true, buyError: undefined, buyHash: undefined });
+      if (t) next.set(addr.toLowerCase(), { ...t, buying: true, buyError: undefined, buyHash: undefined, buySummary: undefined });
       return next;
     });
     const slippageBps = Math.round(slippage * 100);
-    const result = await doBuy(addr, buyAmount, slippageBps);
+    const result: RuntimeResponse = await doBuy(token, buyAmount, slippageBps).catch((error: unknown) => ({
+      ok: false,
+      error: error instanceof Error ? error.message : 'Buy failed',
+    }));
     setTokenMap(prev => {
       const next = new Map(prev);
       const t = next.get(addr.toLowerCase());
       if (t) next.set(addr.toLowerCase(), {
         ...t,
         buying: false,
-        buyError: result.ok ? undefined : (result.error ?? 'Failed'),
+        buyError: result.error,
         buyHash: result.ok ? result.hash : undefined,
+        buySummary: result.summary,
       });
       return next;
     });
@@ -379,9 +468,9 @@ export default function TrenchesApp() {
         <div className="tr-header-controls">
           <label className="tr-ctrl">
             Buy
-            <input className="tr-ctrl-input" type="number" min={1} value={buyAmount}
-              onChange={e => setBuyAmount(Math.max(1, Number(e.target.value)))} />
-            USDG
+            <input className="tr-ctrl-input" type="number" min={0.0001} step={0.001} value={buyAmount}
+              onChange={e => setBuyAmount(Math.max(0.0001, Number(e.target.value)))} />
+            ETH
           </label>
           <label className="tr-ctrl">
             Slippage

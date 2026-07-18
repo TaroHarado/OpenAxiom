@@ -1,31 +1,32 @@
 :host {
   all: initial;
-  --tw-accent: #ccff00;
-  --tw-accent-2: #e4ff70;
-  --tw-accent-b12: rgba(204, 255, 0, 0.12);
-  --tw-accent-b30: rgba(204, 255, 0, 0.30);
-  --tw-accent-b50: rgba(204, 255, 0, 0.50);
-  --tw-accent-glow: rgba(204, 255, 0, 0.14);
-  --tw-accent-deep: #1b2400;
-  --tw-accent-deep-2: #232f00;
-  --tw-sell: #ff5c72;
-  --tw-sell-b50: rgba(255, 92, 114, 0.5);
-  --tw-sell-b12: rgba(255, 92, 114, 0.12);
+  --tw-accent: #14f195;
+  --tw-accent-2: #7dffc6;
+  --tw-accent-b12: rgba(20, 241, 149, 0.10);
+  --tw-accent-b30: rgba(20, 241, 149, 0.28);
+  --tw-accent-b50: rgba(20, 241, 149, 0.48);
+  --tw-accent-glow: rgba(20, 241, 149, 0.12);
+  --tw-accent-deep: #0f2419;
+  --tw-accent-deep-2: #123321;
+  --tw-sell: #ff607a;
+  --tw-sell-b50: rgba(255, 96, 122, 0.5);
+  --tw-sell-b12: rgba(255, 96, 122, 0.12);
   --tw-sell-deep: #2a0f16;
   --tw-sell-deep-2: #35131d;
   --tw-warn: #f5a524;
-  --tw-panel: #0a0c11;
-  --tw-panel-2: #090b0f;
+  --tw-panel: #0c0d12;
+  --tw-panel-2: #101119;
   --tw-bg: #07080b;
-  --tw-line: #1e2230;
-  --tw-line-soft: #15171f;
-  --tw-text: #eef1f6;
-  --tw-muted: #8a91a3;
-  --tw-faint: #5f6675;
+  --tw-line: #1a1c27;
+  --tw-line-soft: #12141d;
+  --tw-text: #e9ecf2;
+  --tw-muted: #7f8596;
+  --tw-faint: #424755;
 }
 
 * {
   box-sizing: border-box;
+  letter-spacing: 0 !important;
 }
 
 button,
@@ -42,22 +43,50 @@ select {
   top: 0;
   left: 0;
   z-index: 2147483647;
-  font-family: "Geist Mono", "JetBrains Mono", ui-monospace, "Cascadia Code", Menlo, monospace;
+  font-family: Inter, "Segoe UI Variable", "Segoe UI", sans-serif;
   color: var(--tw-text);
   letter-spacing: -0.01em;
 }
 
+.tw-page-switch {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 2147483647;
+  display: inline-flex;
+  height: 38px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px 0 12px;
+  border: 1px solid var(--tw-line);
+  border-radius: 999px;
+  background: rgba(12, 13, 18, 0.96);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.32);
+  color: var(--tw-muted);
+  cursor: pointer;
+  font-family: Inter, "Segoe UI Variable", "Segoe UI", sans-serif;
+  font-size: 11px;
+  user-select: none;
+}
+
+.tw-page-switch input { position: absolute; opacity: 0; pointer-events: none; }
+.tw-page-switch-label { color: var(--tw-text); font-weight: 750; }
+.tw-page-switch strong { min-width: 18px; color: var(--tw-faint); font-size: 9px; text-transform: uppercase; }
+.tw-page-switch-track { position: relative; width: 28px; height: 16px; border-radius: 999px; background: #2a2d36; transition: background 120ms ease; }
+.tw-page-switch-track span { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #858b99; transition: transform 120ms ease, background 120ms ease; }
+.tw-page-switch-on .tw-page-switch-track { background: rgba(20, 241, 149, 0.22); }
+.tw-page-switch-on .tw-page-switch-track span { transform: translateX(12px); background: var(--tw-accent); }
+.tw-page-switch-on strong { color: var(--tw-accent); }
+.tw-page-switch:focus-within { outline: 2px solid var(--tw-accent); outline-offset: 2px; }
+
 .tw-widget {
   width: 312px;
+  max-height: calc(100vh - 16px);
   overflow: hidden;
-  border: 1px solid var(--tw-line);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 16px;
-  background:
-    radial-gradient(circle at 16% 0%, var(--tw-accent-glow), transparent 40%),
-    linear-gradient(180deg, #0d0f14 0%, #0a0b10 52%, #07080b 100%);
-  box-shadow:
-    0 24px 50px rgba(0, 0, 0, 0.6),
-    0 4px 14px rgba(0, 0, 0, 0.4);
+  background: linear-gradient(180deg, #0d1118 0%, #10141b 100%);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
   user-select: none;
 }
 
@@ -67,11 +96,11 @@ select {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 42px;
-  padding: 0 8px 0 10px;
+  min-height: 60px;
+  padding: 10px 12px;
   cursor: grab;
-  background: linear-gradient(180deg, var(--tw-accent-b12), transparent);
-  border-bottom: 1px solid var(--tw-line-soft);
+  background: transparent;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .tw-header:active {
@@ -91,23 +120,23 @@ select {
 
 .tw-brand {
   min-width: 0;
-  gap: 8px;
+  gap: 10px;
 }
 
 .tw-logo {
   display: grid;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   flex-shrink: 0;
   place-items: center;
-  border-radius: 7px;
-  border: 1px solid var(--tw-accent-b30);
-  background: linear-gradient(145deg, #141a05, #0a1000);
+  border-radius: 8px;
+  border: 1px solid rgba(20, 241, 149, 0.25);
+  background: linear-gradient(145deg, #10151a, #07110c);
   color: var(--tw-accent);
   font-size: 8px;
   font-weight: 900;
   letter-spacing: 0.04em;
-  box-shadow: 0 0 16px var(--tw-accent-glow);
+  box-shadow: 0 0 24px rgba(20, 241, 149, 0.08);
 }
 
 .tw-title-wrap {
@@ -118,49 +147,39 @@ select {
   line-height: 1;
 }
 
-.tw-title {
-  font-size: 12px;
+.tw-eyebrow {
+  color: var(--tw-faint);
+  font-size: 8px;
   font-weight: 800;
-  color: var(--tw-text);
-  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 
+.tw-title-line {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.tw-title {
+  font-size: 12px;
+  font-weight: 900;
+  color: var(--tw-text);
+}
+
 .tw-mint {
-  max-width: 116px;
+  max-width: 96px;
   overflow: hidden;
   color: var(--tw-faint);
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
   letter-spacing: 0;
 }
 
-.tw-preset {
-  display: inline-flex;
-  height: 21px;
-  align-items: center;
-  gap: 2px;
-  border: 1px solid var(--tw-accent-b30);
-  border-radius: 6px;
-  background: var(--tw-accent-b12);
-  color: var(--tw-accent);
-  cursor: pointer;
-  font-size: 10px;
-  font-weight: 700;
-  padding: 0 6px;
-  letter-spacing: 0.03em;
-  transition: border-color 120ms, color 120ms;
-}
-
-.tw-preset:hover {
-  border-color: var(--tw-accent-b50);
-  color: var(--tw-accent-2);
-}
-
 .tw-header-actions {
-  gap: 2px;
+  gap: 4px;
 }
 
 .tw-rpc-warn {
@@ -180,11 +199,12 @@ select {
 
 .tw-icon-btn {
   display: grid;
-  width: 23px;
-  height: 23px;
+  width: 28px;
+  height: 28px;
   place-items: center;
   border: 0;
-  border-radius: 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
   background: transparent;
   color: var(--tw-faint);
   cursor: pointer;
@@ -193,36 +213,132 @@ select {
 
 .tw-icon-btn:hover,
 .tw-icon-active {
-  background: var(--tw-accent-b12);
-  color: var(--tw-accent);
+  border-color: var(--tw-line);
+  background: #101119;
+  color: var(--tw-text);
 }
 
 /* ─── Body ────────────────────────────────────────────── */
 
 .tw-body {
-  padding: 12px;
+  max-height: calc(100vh - 105px);
+  overflow-y: auto;
+  padding: 0;
   background: transparent;
 }
 
+.tw-body::-webkit-scrollbar { width: 4px; }
+.tw-body::-webkit-scrollbar-thumb { border-radius: 4px; background: var(--tw-line); }
+
+.tw-command-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  padding: 14px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.tw-account-picker {
+  margin-bottom: 12px;
+  border: 1px solid #26313a;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #090c10;
+}
+
+.tw-account-picker-head {
+  display: flex;
+  min-height: 46px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--tw-line);
+}
+
+.tw-account-picker-head > div { display: grid; gap: 3px; }
+.tw-account-picker-head strong { color: var(--tw-text); font-size: 10px; }
+.tw-account-picker-head span { color: var(--tw-warn); font-size: 8px; font-weight: 800; text-transform: uppercase; }
+.tw-account-picker-head button { height: 26px; padding: 0 9px; border: 1px solid #26313a; border-radius: 6px; background: #0d151b; color: #55c2ff; cursor: pointer; font-size: 8px; font-weight: 900; text-transform: uppercase; }
+
+.tw-account-picker-list { display: grid; max-height: 250px; overflow-y: auto; }
+.tw-account-pick-row { display: grid; grid-template-columns: 30px minmax(0, 1fr) 54px; min-height: 46px; align-items: center; gap: 4px; padding: 0 8px; border-bottom: 1px solid var(--tw-line-soft); }
+.tw-account-pick-row:last-child { border-bottom: 0; }
+.tw-account-pick-active { box-shadow: inset 2px 0 #55c2ff; background: #0c1c27; }
+.tw-account-radio { display: grid; width: 28px; height: 28px; place-items: center; border: 0; background: transparent; cursor: pointer; }
+.tw-account-radio span { width: 11px; height: 11px; border: 1px solid #3b4652; border-radius: 50%; }
+.tw-account-pick-active .tw-account-radio span { border: 3px solid #55c2ff; }
+.tw-account-identity { display: grid; min-width: 0; gap: 2px; border: 0; background: transparent; cursor: pointer; text-align: left; }
+.tw-account-identity strong { overflow: hidden; color: var(--tw-text); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.tw-account-identity small { color: var(--tw-faint); font-size: 8px; }
+.tw-account-check input { position: absolute; opacity: 0; pointer-events: none; }
+.tw-account-check span { display: grid; height: 26px; place-items: center; border: 1px solid var(--tw-line); border-radius: 6px; color: var(--tw-faint); cursor: pointer; font-size: 8px; font-weight: 900; text-transform: uppercase; }
+.tw-account-check input:checked + span { border-color: rgba(245, 165, 36, 0.38); background: #261b0c; color: var(--tw-warn); }
+.tw-account-picker-empty { padding: 18px 10px; color: var(--tw-faint); font-size: 9px; text-align: center; }
+
+.tw-status-tile {
+  display: grid;
+  min-width: 0;
+  min-height: 38px;
+  align-content: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.tw-status-tile:first-child { padding-left: 0; }
+.tw-status-tile + .tw-status-tile { border-left: 1px solid rgba(255, 255, 255, 0.1); }
+
+.tw-status-tile span {
+  overflow: hidden;
+  color: var(--tw-faint);
+  font-size: 8px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.tw-status-tile strong {
+  overflow: hidden;
+  color: var(--tw-text);
+  font-size: 11px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  text-transform: capitalize;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.tw-status-ready strong { color: var(--tw-accent); }
+.tw-status-warn strong { color: var(--tw-warn); }
+
 .tw-trade {
-  padding: 0 0 8px;
+  margin: 0;
+  padding: 16px 12px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .tw-section-head {
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .tw-section-label {
-  font-size: 11px;
-  font-weight: 800;
-  color: var(--tw-accent);
-  letter-spacing: 0.02em;
+  color: var(--tw-text);
+  font-size: 13px;
+  font-weight: 900;
 }
 
 .tw-trade-sell .tw-section-label {
-  color: var(--tw-sell);
+  color: var(--tw-text);
 }
 
 .tw-section-meta {
@@ -230,9 +346,9 @@ select {
   min-width: 0;
   align-items: center;
   gap: 4px;
-  color: var(--tw-muted);
-  font-size: 10px;
-  font-weight: 500;
+  color: var(--tw-faint);
+  font-size: 9px;
+  font-weight: 700;
 }
 
 .tw-position-meta {
@@ -242,46 +358,66 @@ select {
   white-space: nowrap;
 }
 
-/* SOL mark */
-.tw-solana {
-  display: inline-block;
-  width: 11px;
-  height: 7px;
-  border-radius: 1px;
-  background: linear-gradient(90deg, #9945ff 0%, #14f195 100%);
-  transform: skewX(-12deg);
-  vertical-align: middle;
-}
-
 /* ─── Buy / Sell quick buttons ────────────────────────── */
 
 .tw-quick-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 6px;
+  gap: 5px;
 }
 
 .tw-quick {
-  display: flex;
-  height: 38px;
+  display: grid;
+  height: 42px;
   min-width: 0;
   align-items: center;
   justify-content: center;
+  align-content: center;
   gap: 3px;
-  border: 1px solid var(--tw-line);
-  border-radius: 10px;
-  background: var(--tw-panel);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.025);
   color: var(--tw-text);
   cursor: pointer;
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 900;
   letter-spacing: 0;
   outline: none;
-  transition: background 90ms, border-color 90ms, color 90ms, transform 90ms;
+  transition: background 120ms, border-color 120ms, color 120ms, transform 120ms;
+  font-variant-numeric: tabular-nums;
 }
 
 .tw-quick:active {
-  transform: scale(0.96);
+  transform: translateY(1px);
+}
+
+.tw-quick-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.tw-quick small {
+  overflow: hidden;
+  color: var(--tw-faint);
+  font-size: 7px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.tw-icon-btn:focus-visible,
+.tw-quick:focus-visible,
+.tw-orders-head:focus-visible,
+.tw-settings-group:focus-visible,
+.tw-settings-actions button:focus-visible,
+.tw-btn-action-sm:focus-visible,
+.tw-btn-ghost-xs:focus-visible,
+.tw-compact:focus-visible {
+  outline: 2px solid var(--tw-accent);
+  outline-offset: 2px;
 }
 
 .tw-quick:disabled {
@@ -290,26 +426,30 @@ select {
 }
 
 .tw-quick-buy:hover {
-  border-color: var(--tw-accent-b50);
-  color: var(--tw-accent);
+  border-color: #2c3140;
+  transform: translateY(-1px);
 }
 
 .tw-quick-buy.tw-selected {
-  border-color: var(--tw-accent-b50);
+  border-color: rgba(20, 241, 149, 0.36);
   background: var(--tw-accent-deep);
   color: var(--tw-accent);
 }
 
+.tw-quick-buy.tw-selected small { color: rgba(125, 255, 198, 0.62); }
+
 .tw-quick-sell:hover {
-  border-color: var(--tw-sell-b50);
-  color: var(--tw-sell);
+  border-color: #2c3140;
+  transform: translateY(-1px);
 }
 
 .tw-quick-sell.tw-selected {
-  border-color: var(--tw-sell-b50);
+  border-color: rgba(255, 96, 122, 0.34);
   background: var(--tw-sell-deep);
   color: var(--tw-sell);
 }
+
+.tw-quick-sell.tw-selected small { color: rgba(255, 140, 158, 0.62); }
 
 /* inline edit mode: number inputs replace buttons */
 input.tw-quick.tw-quick-edit {
@@ -340,29 +480,35 @@ input.tw-quick.tw-quick-edit::-webkit-outer-spin-button {
 /* ─── Stat row (slippage / priority / fee / protection) ── */
 
 .tw-stat-row {
-  gap: 4px;
-  margin-top: 9px;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .tw-stat {
   display: inline-flex;
   flex: 1;
-  height: 22px;
+  height: 20px;
   align-items: center;
   justify-content: center;
   gap: 4px;
-  border-radius: 6px;
-  background: transparent;
   border: 0;
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0;
+  background: transparent;
   color: var(--tw-muted);
   cursor: default;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
   letter-spacing: 0;
   white-space: nowrap;
   min-width: 0;
 }
+
+.tw-stat:last-child { border-right: 0; }
 
 .tw-stat svg {
   flex-shrink: 0;
@@ -384,17 +530,18 @@ input.tw-quick.tw-quick-edit::-webkit-outer-spin-button {
 /* ─── Divider ─────────────────────────────────────────── */
 
 .tw-divider {
-  height: 1px;
-  margin: 4px 0 12px;
-  background: var(--tw-line-soft);
+  display: none;
 }
 
 /* ─── Orders ──────────────────────────────────────────── */
 
 .tw-orders {
-  margin-top: 6px;
-  border-top: 1px solid var(--tw-line-soft);
-  padding-top: 10px;
+  margin-top: 0;
+  padding: 16px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .tw-orders-head {
@@ -402,23 +549,22 @@ input.tw-quick.tw-quick-edit::-webkit-outer-spin-button {
   justify-content: space-between;
   border: 0;
   background: transparent;
-  color: var(--tw-muted);
+  color: var(--tw-text);
   cursor: pointer;
-  padding: 0 0 8px;
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  padding: 0;
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .tw-orders-head:hover {
-  color: var(--tw-text);
+  color: var(--tw-accent);
 }
 
 .tw-orders-list {
   display: grid;
-  gap: 4px;
+  gap: 0;
   max-height: 168px;
+  margin-top: 10px;
   overflow-y: auto;
 }
 
@@ -434,13 +580,14 @@ input.tw-quick.tw-quick-edit::-webkit-outer-spin-button {
 .tw-order-row {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr) 42px 46px 34px;
-  min-height: 28px;
+  min-height: 42px;
   align-items: center;
   gap: 5px;
-  border: 1px solid var(--tw-line-soft);
-  border-radius: 8px;
-  background: var(--tw-panel);
-  padding: 3px 7px;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
   color: var(--tw-muted);
   font-size: 10px;
 }
@@ -449,7 +596,7 @@ input.tw-quick.tw-quick-edit::-webkit-outer-spin-button {
   display: inline-grid;
   height: 17px;
   place-items: center;
-  border-radius: 5px;
+  border-radius: 6px;
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.04em;
@@ -521,134 +668,33 @@ input.tw-quick.tw-quick-edit::-webkit-outer-spin-button {
 
 .tw-empty {
   display: grid;
-  height: 34px;
+  height: 48px;
   place-items: center;
-  border: 1px dashed var(--tw-line);
-  border-radius: 8px;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0;
+  background: transparent;
   color: var(--tw-faint);
   font-size: 10px;
   letter-spacing: 0.04em;
 }
 
-/* ─── Preset panel ────────────────────────────────────── */
-
-.tw-preset-panel,
 .tw-settings-panel {
   margin-bottom: 12px;
   border: 1px solid var(--tw-line);
   border-radius: 12px;
-  background: var(--tw-panel);
-  padding: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.014), transparent 50%),
+    var(--tw-panel);
+  padding: 14px;
 }
 
-.tw-preset-title,
 .tw-settings-title {
-  margin-bottom: 9px;
+  margin-bottom: 12px;
   color: var(--tw-accent);
   font-size: 9px;
   font-weight: 900;
-  letter-spacing: 0.1em;
   text-transform: uppercase;
-}
-
-.tw-preset-list {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 5px;
-  margin-bottom: 8px;
-}
-
-.tw-preset-row {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-  border: 1px solid var(--tw-line);
-  border-radius: 8px;
-  background: var(--tw-panel-2);
-  color: var(--tw-muted);
-  cursor: pointer;
-  padding: 6px 6px;
-  text-align: left;
-  transition: border-color 120ms, background 120ms, color 120ms;
-}
-
-.tw-preset-row:hover,
-.tw-preset-row-active {
-  border-color: var(--tw-accent-b30);
-  background: var(--tw-accent-deep);
-  color: var(--tw-accent-2);
-}
-
-.tw-preset-row span,
-.tw-preset-row small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tw-preset-row span {
-  font-size: 10px;
-  font-weight: 800;
-}
-
-.tw-preset-row small {
-  color: var(--tw-faint);
-  font-size: 8px;
-}
-
-.tw-preset-name {
-  display: grid;
-  gap: 4px;
-  margin-bottom: 8px;
-  color: var(--tw-muted);
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-}
-
-.tw-preset-name input {
-  height: 28px;
-  border: 1px solid var(--tw-line);
-  border-radius: 7px;
-  background: var(--tw-bg);
-  color: var(--tw-text);
-  outline: none;
-  padding: 0 9px;
-  font-size: 10px;
-}
-
-.tw-preset-name input:focus {
-  border-color: var(--tw-accent-b50);
-}
-
-.tw-preset-actions {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 5px;
-}
-
-.tw-preset-actions button {
-  height: 28px;
-  border: 1px solid var(--tw-line);
-  border-radius: 7px;
-  background: var(--tw-panel);
-  color: var(--tw-muted);
-  cursor: pointer;
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  transition: border-color 120ms, color 120ms;
-}
-
-.tw-preset-actions button:hover:not(:disabled) {
-  border-color: var(--tw-accent-b30);
-  color: var(--tw-accent-2);
-}
-
-.tw-preset-actions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.35;
 }
 
 /* ─── Settings panel ──────────────────────────────────── */
@@ -658,15 +704,14 @@ input.tw-quick.tw-quick-edit::-webkit-outer-spin-button {
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  margin: 12px 0 8px;
+  margin: 16px 0 10px;
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--tw-muted);
+  color: var(--tw-text);
   cursor: pointer;
   font-size: 9px;
   font-weight: 900;
-  letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
@@ -691,24 +736,64 @@ input.tw-quick.tw-quick-edit::-webkit-outer-spin-button {
 .tw-settings-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 7px;
+  gap: 8px;
+}
+
+.tw-preset-fields {
+  grid-column: 1 / -1;
+  min-width: 0;
+  border: 0;
+}
+
+.tw-preset-fields legend {
+  margin-bottom: 6px;
+  color: var(--tw-faint);
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.tw-preset-fields > div {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.tw-preset-fields label {
+  position: relative;
+  display: block;
+}
+
+.tw-preset-fields input {
+  padding-right: 28px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.tw-preset-fields label > span {
+  position: absolute;
+  right: 7px;
+  top: 12px;
+  color: var(--tw-faint);
+  font-size: 7px;
+  pointer-events: none;
 }
 
 .tw-settings-grid label {
   display: grid;
   gap: 4px;
-  color: var(--tw-muted);
+  color: var(--tw-faint);
   font-size: 9px;
   font-weight: 800;
-  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .tw-settings-grid input,
 .tw-settings-grid select {
   width: 100%;
-  height: 28px;
+  height: 36px;
   border: 1px solid var(--tw-line);
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--tw-bg);
   color: var(--tw-text);
   outline: none;
@@ -719,7 +804,8 @@ input.tw-quick.tw-quick-edit::-webkit-outer-spin-button {
 
 .tw-settings-grid input:focus,
 .tw-settings-grid select:focus {
-  border-color: var(--tw-accent-b50);
+  border-color: rgba(20, 241, 149, 0.55);
+  box-shadow: 0 0 0 3px rgba(20, 241, 149, 0.06);
 }
 
 .tw-settings-grid input:disabled {
@@ -730,9 +816,11 @@ input.tw-quick.tw-quick-edit::-webkit-outer-spin-button {
   display: flex !important;
   align-items: center;
   justify-content: space-between;
-  border: 1px solid var(--tw-line-soft);
-  border-radius: 7px;
-  padding: 6px 8px;
+  min-height: 40px;
+  border: 1px solid var(--tw-line);
+  border-radius: 8px;
+  background: #090a0f;
+  padding: 8px 10px;
 }
 
 .tw-toggle-row input {
@@ -750,10 +838,10 @@ input.tw-quick.tw-quick-edit::-webkit-outer-spin-button {
 }
 
 .tw-settings-actions button {
-  height: 28px;
+  height: 34px;
   border: 1px solid var(--tw-line);
-  border-radius: 7px;
-  background: var(--tw-panel);
+  border-radius: 8px;
+  background: #090a0f;
   color: var(--tw-muted);
   cursor: pointer;
   font-size: 9px;
@@ -774,15 +862,15 @@ input.tw-quick.tw-quick-edit::-webkit-outer-spin-button {
   position: absolute;
   right: 8px;
   bottom: 8px;
-  min-height: 30px;
-  max-width: 224px;
-  gap: 6px;
+  min-height: 38px;
+  max-width: 288px;
+  gap: 8px;
   border: 1px solid var(--tw-line);
   border-radius: 9px;
-  background: #0c0e13;
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.6);
+  background: #090a0f;
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.46);
   color: var(--tw-text);
-  padding: 7px 9px;
+  padding: 9px 11px;
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0;
@@ -815,11 +903,11 @@ input.tw-quick.tw-quick-edit::-webkit-outer-spin-button {
   align-items: center;
   gap: 6px;
   height: 34px;
-  border: 1px solid var(--tw-accent-b30);
-  border-radius: 10px;
-  background: linear-gradient(180deg, var(--tw-accent-deep) 0%, var(--tw-panel) 100%);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5), 0 0 18px var(--tw-accent-glow);
-  color: var(--tw-accent);
+  border: 1px solid var(--tw-line);
+  border-radius: 8px;
+  background: rgba(12, 13, 18, 0.96);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.42);
+  color: var(--tw-text);
   cursor: pointer;
   padding: 0 13px;
   font-size: 11px;
@@ -829,8 +917,8 @@ input.tw-quick.tw-quick-edit::-webkit-outer-spin-button {
 }
 
 .tw-compact:hover {
-  color: var(--tw-accent-2);
-  border-color: var(--tw-accent-b50);
+  color: var(--tw-accent);
+  border-color: var(--tw-accent-b30);
 }
 
 /* ─── Flash animations ────────────────────────────────── */
@@ -861,83 +949,12 @@ input.tw-quick.tw-quick-edit::-webkit-outer-spin-button {
   animation: tw-error-flash 480ms ease;
 }
 
-/* ─── Confirmation overlay ────────────────────────────── */
-
-.tw-confirm-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 10;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  background: rgba(7, 8, 11, 0.94);
-  backdrop-filter: blur(3px);
-  border-radius: 16px;
-}
-
-.tw-confirm-text {
-  font-size: 13px;
-  font-weight: 800;
-  color: var(--tw-text);
-  letter-spacing: 0.02em;
-}
-
-.tw-confirm-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.tw-confirm-cancel,
-.tw-confirm-ok {
-  height: 32px;
-  padding: 0 18px;
-  border-radius: 8px;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  cursor: pointer;
-}
-
-.tw-confirm-cancel {
-  border: 1px solid var(--tw-line);
-  background: transparent;
-  color: var(--tw-muted);
-}
-
-.tw-confirm-cancel:hover {
-  border-color: #33384b;
-  color: var(--tw-text);
-}
-
-.tw-confirm-ok.tw-confirm-buy {
-  border: 1px solid var(--tw-accent-b50);
-  background: var(--tw-accent-deep);
-  color: var(--tw-accent);
-}
-
-.tw-confirm-ok.tw-confirm-buy:hover {
-  background: var(--tw-accent-deep-2);
-}
-
-.tw-confirm-ok.tw-confirm-sell {
-  border: 1px solid var(--tw-sell-b50);
-  background: var(--tw-sell-deep);
-  color: var(--tw-sell);
-}
-
-.tw-confirm-ok.tw-confirm-sell:hover {
-  background: var(--tw-sell-deep-2);
-}
-
 /* ─── Wallet manager (settings) ───────────────────────── */
 
 .tw-wallet-manager {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   margin-bottom: 4px;
 }
 
@@ -945,11 +962,11 @@ input.tw-quick.tw-quick-edit::-webkit-outer-spin-button {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 9px;
-  background: var(--tw-panel-2);
-  border: 1px solid var(--tw-line-soft);
-  border-radius: 8px;
-  min-height: 32px;
+  padding: 9px 10px;
+  background: #090a0f;
+  border: 1px solid var(--tw-line);
+  border-radius: 10px;
+  min-height: 40px;
 }
 
 .tw-wallet-label {
@@ -991,7 +1008,7 @@ input.tw-quick.tw-quick-edit::-webkit-outer-spin-button {
   box-sizing: border-box;
   background: var(--tw-bg);
   border: 1px solid var(--tw-line);
-  border-radius: 7px;
+  border-radius: 8px;
   color: var(--tw-text);
   font-size: 11px;
   font-family: ui-monospace, 'JetBrains Mono', monospace;
@@ -1009,11 +1026,12 @@ input.tw-quick.tw-quick-edit::-webkit-outer-spin-button {
 
 .tw-btn-action-sm {
   font-size: 10px;
-  padding: 5px 11px;
+  min-height: 30px;
+  padding: 5px 12px;
   border: 1px solid var(--tw-accent-b50);
   background: var(--tw-accent-deep);
   color: var(--tw-accent);
-  border-radius: 7px;
+  border-radius: 8px;
   cursor: pointer;
   flex-shrink: 0;
   font-weight: 800;
@@ -1046,9 +1064,17 @@ input.tw-quick.tw-quick-edit::-webkit-outer-spin-button {
 /* ─── Responsive ──────────────────────────────────────── */
 
 @media (max-width: 420px) {
-  .tw-widget {
-    width: min(312px, calc(100vw - 16px));
-  }
+  .tw-widget { width: min(312px, calc(100vw - 16px)); border-radius: 16px; }
+
+  .tw-header { min-height: 64px; padding: 12px 18px; }
+  .tw-title { font-size: 14px; }
+  .tw-command-strip,
+  .tw-trade,
+  .tw-orders { padding: 20px 16px; }
+  .tw-status-tile { padding: 0 8px; }
+  .tw-status-tile strong { font-size: 10px; }
+  .tw-quick-grid { gap: 6px; }
+  .tw-quick { height: 54px; }
 
   .tw-order-row {
     grid-template-columns: 34px minmax(0, 1fr) 38px 42px;
