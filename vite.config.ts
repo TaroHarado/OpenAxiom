@@ -8,7 +8,6 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       input: {
-        injected: 'src/injected.ts',
         options: 'options.html',
         trenches: 'trenches.html',
       },

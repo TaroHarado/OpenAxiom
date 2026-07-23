@@ -5,11 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "tsc --noEmit && vite build && vite build --config vite.background.config.ts && vite build --config vite.content.config.ts",
-    "router": "node server/rpc-router.mjs"
+    "dev:site": "vite --config vite.site.config.ts --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build && vite build --config vite.background.config.ts && vite build --config vite.content.config.ts && npm run verify:dist",
+    "build:site": "tsc --noEmit -p site/tsconfig.json && vite build --config vite.site.config.ts",
+    "build:all": "npm run build && npm run build:site",
+    "test": "node --experimental-strip-types --test scripts/*.test.mjs",
+    "verify:dist": "node scripts/verify-extension-dist.mjs",
+    "benchmark:rh-routes": "node scripts/benchmark-robinhood-routes.mjs"
   },
   "dependencies": {
-    "@solana/web3.js": "^1.98.4",
     "@vitejs/plugin-react": "latest",
     "lucide-react": "latest",
     "react": "latest",
